@@ -3,9 +3,11 @@ import Anthropic, {
   APIConnectionTimeoutError,
   APIError,
   APIUserAbortError,
+  AnthropicError,
 } from '@anthropic-ai/sdk';
 import { transformJSONSchema } from '@anthropic-ai/sdk/lib/transform-json-schema';
 import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages';
+import { z } from 'zod';
 import type { LlmConfig, Secret } from '../config.js';
 import { ProviderError, type ProviderErrorDetails } from '../errors.js';
 import type { ProviderAdapter, ProviderRequest, ProviderResponse, StopReason } from '../provider.js';
@@ -39,6 +41,19 @@ export function createAnthropicClient(apiKey: Secret, baseURL: string = ANTHROPI
     openTelemetry: false,
   });
 }
+
+/** The fields the adapter reads. A 200 can still carry another body, such as a gateway page. */
+const MessageShape = z.object({
+  model: z.string(),
+  stop_reason: z.string().nullable(),
+  usage: z.object({ input_tokens: z.int().nonnegative(), output_tokens: z.int().nonnegative() }),
+  content: z.array(
+    z.union([
+      z.object({ type: z.literal('text'), text: z.string() }),
+      z.object({ type: z.string().refine((type) => type !== 'text') }),
+    ]),
+  ),
+});
 
 export interface AnthropicAdapterOptions {
   model: string;
@@ -82,22 +97,26 @@ export class AnthropicAdapter implements ProviderAdapter {
     const options: MessageRequestOptions = { timeout: request.timeoutMs, maxRetries: 0 };
     if (request.signal !== undefined) options.signal = request.signal;
 
-    let message: Message;
+    let raw: unknown;
     try {
-      message = await this.createMessage(params, options);
+      raw = await this.createMessage(params, options);
     } catch (error) {
-      throw toProviderError(error, this.clock.now());
+      throw request.signal?.aborted ? new ProviderError('ABORTED') : toProviderError(error, this.clock.now());
     }
+    const message = MessageShape.safeParse(raw);
+    // A 200 whose body is not a Message is treated like a gateway failure: transient, and retried.
+    if (!message.success) throw new ProviderError('PROVIDER_UNAVAILABLE');
+    const { content, usage, model, stop_reason } = message.data;
     return {
-      text: message.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join(''),
-      usage: { inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens },
-      model: message.model,
-      stopReason: mapStopReason(message.stop_reason),
+      text: content.flatMap((block) => ('text' in block ? [block.text] : [])).join(''),
+      usage: { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens },
+      model,
+      stopReason: mapStopReason(stop_reason),
     };
   }
 }
 
-function mapStopReason(reason: Message['stop_reason']): StopReason {
+function mapStopReason(reason: string | null): StopReason {
   switch (reason) {
     case 'end_turn':
       return 'end';
@@ -112,13 +131,19 @@ function mapStopReason(reason: Message['stop_reason']): StopReason {
   }
 }
 
-/** Maps SDK errors to ProviderError. Anything else is a bug and is returned unchanged for rethrow. */
-export function toProviderError(error: unknown, now: number): unknown {
+/**
+ * Maps any rejection of the SDK call to a ProviderError; the original error is never attached. A
+ * plain AnthropicError is the SDK refusing the request before sending it. Anything else escaped the
+ * SDK while it read the response body (a connection reset mid-body, say) and counts as an outage.
+ */
+export function toProviderError(error: unknown, now: number): ProviderError {
   // Subclasses before their parents: abort and timeout extend APIError / APIConnectionError.
   if (error instanceof APIUserAbortError) return new ProviderError('ABORTED');
   if (error instanceof APIConnectionTimeoutError) return new ProviderError('PROVIDER_TIMEOUT');
   if (error instanceof APIConnectionError) return new ProviderError('PROVIDER_UNAVAILABLE');
-  if (!(error instanceof APIError)) return error;
+  if (!(error instanceof APIError)) {
+    return new ProviderError(error instanceof AnthropicError ? 'PROVIDER_BAD_REQUEST' : 'PROVIDER_UNAVAILABLE');
+  }
 
   // `instanceof APIError` narrows to APIError<any, any, any>: read each field as unknown and narrow.
   const rawStatus: unknown = error.status;

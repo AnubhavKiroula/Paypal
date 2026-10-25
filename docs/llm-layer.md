@@ -185,12 +185,12 @@ flowchart TD
 | `CONTEXT_TOO_LARGE` | no | stop reason `model_context_window_exceeded`; HTTP 413; HTTP 400 "prompt is too long" (`VERIFY`) |
 | `PROVIDER_TIMEOUT` | yes | connection timeout, 408, or the overall deadline |
 | `PROVIDER_RATE_LIMITED` | yes | 429 |
-| `PROVIDER_UNAVAILABLE` | yes | 5xx (including 529 overloaded), 409, connection error |
+| `PROVIDER_UNAVAILABLE` | yes | 5xx (including 529 overloaded), 409, connection error, a failure while reading the response body (connection reset mid-body), or a 200 whose body is not a Message (a gateway page) |
 | `PROVIDER_AUTH` | no | 401, 403 |
-| `PROVIDER_BAD_REQUEST` | no | any other 4xx |
+| `PROVIDER_BAD_REQUEST` | no | any other 4xx, or the SDK refusing the request before sending it (a plain `AnthropicError`) |
 | `ABORTED` | no | the caller's `AbortSignal` |
 
-Every `LlmError` has `code`, `retryable`, `attempts`, `status` and `requestId`, and a fixed message that never contains prompt text, model output or provider payloads. Programming errors are separate classes: `SchemaNotSupportedError`, `NonceExhaustedError`, `LlmConfigError`. Any non-SDK exception from an adapter is a bug, so it propagates unchanged and is not retried.
+Every `LlmError` has `code`, `retryable`, `attempts`, `status` and `requestId`, and a fixed message that never contains prompt text, model output or provider payloads. Programming errors are separate classes: `SchemaNotSupportedError`, `NonceExhaustedError`, `LlmConfigError`. The Anthropic adapter maps **every** rejection of the SDK call to a `ProviderError`, because the SDK rethrows body-read failures as plain `TypeError`s and `SyntaxError`s, and it never attaches the original error. `LlmClient` treats anything other than a `ProviderError` thrown by an adapter as a bug: it propagates unchanged and is not retried.
 
 ## 8. Logging
 
@@ -239,7 +239,7 @@ Removing sampling control does not remove determinism control. The layer's corre
 ## 11. Adding a provider
 
 1. Implement `ProviderAdapter` in `src/adapters/<name>.ts`. It is transport only: map `ProviderRequest` to the SDK by picking fields one by one (never spread), use native structured output if the SDK has it, disable SDK retries, and pass `timeoutMs` and `signal` through.
-2. Map SDK failures to `ProviderError` codes. Return non-SDK errors unchanged, and never put provider messages into errors.
+2. Map every failure of the SDK call, including errors thrown while the SDK reads the body, to a `ProviderError` code. Validate the shape of a 200 body before reading it. Never put provider messages or the original error into errors.
 3. Map stop reasons to `StopReason`, and return only text blocks as `text`.
 4. Add the SDK to `ALLOWED_DEPENDENCIES` in `test/import-boundary.ts`, extend `LLM_PROVIDER` in `config.ts`, and pin every env default the SDK reads.
 5. Add adapter tests with a mocked transport and the real SDK error classes, including a "smuggled `tools` is not sent" test.

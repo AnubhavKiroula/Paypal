@@ -1,8 +1,10 @@
+import { type Server, type ServerResponse, createServer } from 'node:http';
 import {
   APIConnectionError,
   APIConnectionTimeoutError,
   APIError,
   APIUserAbortError,
+  AnthropicError,
   AuthenticationError,
   BadRequestError,
   InternalServerError,
@@ -11,7 +13,7 @@ import {
   RateLimitError,
 } from '@anthropic-ai/sdk';
 import type { Message } from '@anthropic-ai/sdk/resources/messages';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   ANTHROPIC_BASE_URL,
   AnthropicAdapter,
@@ -184,10 +186,37 @@ describe('AnthropicAdapter error mapping (real SDK error classes)', () => {
     expect(rejection).toMatchObject({ code: 'PROVIDER_RATE_LIMITED', details: { retryAfterMs: 2_000 } });
   });
 
-  it('rethrows an error that is not from the SDK unchanged', async () => {
-    const bug = new TypeError('bug');
-    await expect(setup(bug).adapter.complete(baseRequest)).rejects.toBe(bug);
-    expect(toProviderError(bug, NOW)).toBe(bug);
+  it.each([
+    ['a body-read failure', Object.assign(new TypeError('terminated'), { cause: new Error('other side closed') }), 'PROVIDER_UNAVAILABLE'],
+    ['a body parse failure', new SyntaxError('Unexpected token B, "BODY_CANARY" is not valid JSON'), 'PROVIDER_UNAVAILABLE'],
+    ['an SDK refusal before sending', new AnthropicError('Streaming is required'), 'PROVIDER_BAD_REQUEST'],
+  ])('maps %s to a fixed-message ProviderError', async (_label, error, code) => {
+    const rejection = await setup(error).adapter.complete(baseRequest).catch((caught: unknown) => caught);
+    expect(rejection).toBeInstanceOf(ProviderError);
+    expect(rejection).toMatchObject({ code });
+    expect(toProviderError(error, NOW).code).toBe(code);
+    expect(`${String(rejection)} ${JSON.stringify(rejection)}`).not.toContain('CANARY');
+  });
+
+  it('reports ABORTED for any rejection once the caller signal has aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const request = { ...baseRequest, signal: controller.signal };
+    const rejection = await setup(new TypeError('terminated')).adapter.complete(request).catch((caught: unknown) => caught);
+    expect(rejection).toMatchObject({ code: 'ABORTED' });
+  });
+
+  it.each([
+    ['a string body', 'gateway page'],
+    ['null', null],
+    ['content that is not an array', { ...message(), content: 'x' }],
+    ['missing usage', { ...message(), usage: undefined }],
+    ['a fractional token count', { ...message(), usage: { input_tokens: 1.5, output_tokens: 1 } }],
+    ['a text block without text', { ...message(), content: [{ type: 'text' }] }],
+  ])('maps a 200 body with %s to PROVIDER_UNAVAILABLE', async (_label, body) => {
+    const createMessage = vi.fn<CreateMessage>().mockResolvedValue(body as Message);
+    const adapter = new AnthropicAdapter({ model: 'claude-opus-5-5', createMessage });
+    await expect(adapter.complete(baseRequest)).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
   });
 });
 
@@ -226,5 +255,64 @@ describe('createAnthropicClient', () => {
     expect(client.baseURL).toBe(ANTHROPIC_BASE_URL);
     expect(client.maxRetries).toBe(0);
     expect(client.logLevel).toBe('off');
+  });
+});
+
+describe('AnthropicAdapter over the real SDK and a loopback server', () => {
+  let server: Server;
+  let baseURL = '';
+  let respond: (response: ServerResponse) => void = (response) => response.end();
+
+  beforeAll(async () => {
+    server = createServer((_request, response) => respond(response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no loopback port');
+    baseURL = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it.each<[string, (response: ServerResponse) => void]>([
+    [
+      'a connection reset mid-body',
+      (response) => {
+        response.writeHead(200, { 'content-type': 'application/json', 'content-length': '5000' });
+        response.flushHeaders();
+        // Destroy only after the headers and part of the body reached the client, so fetch has resolved.
+        response.write('{"id":"msg_1","content":[{"type":"text","text":"BODY_CANARY', () => {
+          setTimeout(() => response.socket?.destroy(), 20);
+        });
+      },
+    ],
+    [
+      'a 200 gateway page',
+      (response) => {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end('<html>BODY_CANARY</html>');
+      },
+    ],
+    [
+      'a 200 with a body that is not JSON',
+      (response) => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('BODY_CANARY');
+      },
+    ],
+  ])('maps %s to a retryable PROVIDER_UNAVAILABLE that carries none of the body', async (_label, handler) => {
+    respond = handler;
+    const client = createAnthropicClient(new Secret('loopback-key'), baseURL);
+    const adapter = new AnthropicAdapter({
+      model: 'claude-opus-5-5',
+      createMessage: (params, options) => client.messages.create(params, options),
+    });
+
+    const rejection = await adapter.complete(baseRequest).catch((caught: unknown) => caught);
+
+    expect(rejection).toBeInstanceOf(ProviderError);
+    expect(rejection).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true });
+    expect(`${String(rejection)} ${JSON.stringify(rejection)}`).not.toContain('CANARY');
   });
 });

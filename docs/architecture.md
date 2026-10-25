@@ -219,7 +219,7 @@ Every row is a scenario the system must survive without losing money or lying in
 | 9 | **Double submit** — the user or agent sends the same request twice | Client-supplied request key plus `order.idempotency_key` unique constraint | Second submission returns the first result instead of creating a second order | One intent, one order |
 | 10 | **Concurrent overspend** — two requests pass the budget check simultaneously | `BUDGET_RESERVATION` row inserted inside the policy-check transaction, with row-level locking on the mandate | The second transaction blocks, then re-evaluates against the already-reserved amount and is denied or escalated | Total committed + reserved never exceeds the mandate budget |
 
-Details of the reservation mechanism are in [er-diagram.md](er-diagram.md#concurrency-budget-reservations); the state transitions are in [uml.md](uml.md#order-state-machine).
+Details of the reservation mechanism are in [er-diagram.md](er-diagram.md#concurrency-budget-reservations); the state transitions are in [uml.md](uml.md#2-order-state-machine).
 
 ## 6. Security
 

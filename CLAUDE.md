@@ -37,8 +37,9 @@ packages/evals    Scenarios, fakes (PayPal, Channel3), fixtures, runner, results
 docs/             architecture, uml, er-diagram, tech-stack, adr/
 ```
 
-## Commands (planned; not scaffolded yet, update when real)
-`pnpm install` · `pnpm dev` · `pnpm test` · `pnpm lint` · `pnpm typecheck` · `pnpm eval` · `docker compose up -d` (Postgres, Elasticsearch)
+## Commands
+Real: `pnpm install` · `pnpm lint` · `pnpm typecheck` · `pnpm test` (Vitest + coverage) · `pnpm smoke:offline` (runs each package's offline smoke, CI) · `pnpm smoke:live` (packages that call a real provider; never CI).
+Planned: `pnpm dev` · `pnpm eval` · `docker compose up -d` (Postgres, Elasticsearch).
 
 ## Git workflow
 - `origin` = our **fork**. `upstream` = the main team repo. Branch from `upstream/main`.

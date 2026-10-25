@@ -18,7 +18,7 @@ This document is the contract that Phases 2 to 8 build on. Where it diverges fro
 | Prompt text, model output and keys never reach logs or error messages | `Logger` fields carry metadata and a SHA-256 only; error messages are fixed strings | canary tests in `client.test.ts`, `anthropic.test.ts`, `config.test.ts` |
 | Retries are bounded | ≤3 calls per prompt, ≤4 calls total, one overall deadline, enforced even against an adapter that hangs | `client.test.ts` cap and deadline tests |
 | Money is integer minor units | `MoneySchema` (safe integer ≥ 0, ISO alpha-3); BigInt arithmetic; non-integer factors rejected | `money.test.ts` |
-| The layer cannot reach payments or policy | Runtime dependencies are allow-listed; imports are checked against an allow-list plus forbidden patterns (`paypal`, `apps/`, `packages/policy`, `@mandate/evals`) | `boundary.test.ts` |
+| The layer cannot reach payments or policy | Runtime dependencies are allow-listed; imports are checked against an allow-list plus forbidden patterns (`paypal`, `apps/`, `packages/policy`, `@mandate/evals`), in `packages/llm` and in `@mandate/shared`, its one workspace dependency | `boundary.test.ts` |
 | Source is ASCII-only (no invisible "Trojan Source" characters) | Write `\u` escapes; never paste literal invisible characters | `tests/source-hygiene.test.ts` |
 
 ## 2. Interfaces

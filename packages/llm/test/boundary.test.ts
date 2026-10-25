@@ -5,13 +5,15 @@ import { describe, expect, it } from 'vitest';
 import { extractSpecifiers, findForbiddenDependencies, findForbiddenImports } from './import-boundary.js';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+/** @mandate/shared is a runtime dependency, so a path to payments through it would count too. */
+const SHARED_ROOT = fileURLToPath(new URL('../../shared', import.meta.url));
 
-function readSources(dir: string): { path: string; source: string }[] {
-  return readdirSync(join(PACKAGE_ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
-    const full = join(PACKAGE_ROOT, dir, entry.name);
-    if (entry.isDirectory()) return readSources(relative(PACKAGE_ROOT, full));
+function readSources(dir: string, root = PACKAGE_ROOT): { path: string; source: string }[] {
+  return readdirSync(join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+    const full = join(root, dir, entry.name);
+    if (entry.isDirectory()) return readSources(relative(root, full), root);
     if (!entry.name.endsWith('.ts')) return [];
-    return [{ path: relative(PACKAGE_ROOT, full).split(sep).join('/'), source: readFileSync(full, 'utf8') }];
+    return [{ path: relative(root, full).split(sep).join('/'), source: readFileSync(full, 'utf8') }];
   });
 }
 
@@ -81,6 +83,15 @@ describe('@mandate/llm boundary (the real package)', () => {
   it('imports nothing outside the allow-list from production code', () => {
     const files = readSources('src');
     expect(files.length).toBeGreaterThan(5);
+    expect(findForbiddenImports(files)).toEqual([]);
+  });
+
+  it('reaches nothing forbidden through @mandate/shared, its only workspace dependency', () => {
+    const manifest = JSON.parse(readFileSync(join(SHARED_ROOT, 'package.json'), 'utf8')) as Record<string, unknown>;
+    expect(manifest['name']).toBe('@mandate/shared');
+    expect(findForbiddenDependencies(manifest)).toEqual([]);
+    const files = readSources('src', SHARED_ROOT);
+    expect(files.map((file) => file.path)).toContain('src/money.ts');
     expect(findForbiddenImports(files)).toEqual([]);
   });
 

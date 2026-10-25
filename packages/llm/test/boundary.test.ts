@@ -86,6 +86,12 @@ describe('@mandate/llm boundary (the real package)', () => {
     expect(findForbiddenImports(files)).toEqual([]);
   });
 
+  it('does not hand out a raw SDK client from the package index', async () => {
+    const index: Record<string, unknown> = await import('../src/index.js');
+    expect(index['AnthropicAdapter']).toBeTypeOf('function');
+    expect(index).not.toHaveProperty('createAnthropicClient');
+  });
+
   it('reaches nothing forbidden through @mandate/shared, its only workspace dependency', () => {
     const manifest = JSON.parse(readFileSync(join(SHARED_ROOT, 'package.json'), 'utf8')) as Record<string, unknown>;
     expect(manifest['name']).toBe('@mandate/shared');

@@ -1,4 +1,13 @@
-export * from './adapters/anthropic.js';
+// Explicit: createAnthropicClient returns a raw, tool-capable SDK client and stays module-internal.
+export {
+  ANTHROPIC_BASE_URL,
+  AnthropicAdapter,
+  type AnthropicAdapterOptions,
+  type CreateMessage,
+  type MessageRequestOptions,
+  parseRetryAfterMs,
+  toProviderError,
+} from './adapters/anthropic.js';
 export * from './adapters/fake.js';
 export * from './client.js';
 export * from './config.js';

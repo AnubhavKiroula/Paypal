@@ -26,7 +26,8 @@ export type CreateMessage = (params: MessageCreateParamsNonStreaming, options: M
 
 /**
  * Every option that the SDK would otherwise read from the environment is pinned here:
- * credentials (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN), base URL (ANTHROPIC_BASE_URL),
+ * credentials (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN), the webhook signing key
+ * (ANTHROPIC_WEBHOOK_SIGNING_KEY, unused here), base URL (ANTHROPIC_BASE_URL),
  * logging (ANTHROPIC_LOG, which at debug level can print request bodies) and OpenTelemetry
  * content capture. Retries are disabled: LlmClient owns the retry policy and its bounds.
  * ANTHROPIC_CUSTOM_HEADERS cannot be disabled through options; see docs/llm-layer.md.
@@ -35,6 +36,7 @@ export function createAnthropicClient(apiKey: Secret, baseURL: string = ANTHROPI
   return new Anthropic({
     apiKey: apiKey.reveal(),
     authToken: null,
+    webhookKey: null,
     baseURL,
     maxRetries: 0,
     logLevel: 'off',

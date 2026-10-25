@@ -222,6 +222,7 @@ Empty values, as copied from `.env.example`, count as unset. A `LlmConfigError` 
 | SDK env var | Neutralized by |
 |---|---|
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | passing `apiKey` explicitly and `authToken: null` (the SDK does not consult env when a credential is passed in code) |
+| `ANTHROPIC_WEBHOOK_SIGNING_KEY` | `webhookKey: null` (the adapter verifies no webhooks; a second secret must not sit in the client object) |
 | `ANTHROPIC_BASE_URL` | explicit `baseURL: https://api.anthropic.com` (prevents redirecting the key elsewhere) |
 | `ANTHROPIC_LOG` | `logLevel: 'off'` (debug level can print request bodies, i.e. prompt text) |
 | `ANTHROPIC_OPEN_TELEMETRY*` | `openTelemetry: false` (content capture would export prompt text) |

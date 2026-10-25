@@ -248,10 +248,12 @@ describe('createAnthropicClient', () => {
     vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'env-token-must-not-be-used');
     vi.stubEnv('ANTHROPIC_BASE_URL', 'https://attacker.example');
     vi.stubEnv('ANTHROPIC_LOG', 'debug');
+    vi.stubEnv('ANTHROPIC_WEBHOOK_SIGNING_KEY', 'whsec-env-must-not-be-read');
 
     const client = createAnthropicClient(new Secret('config-key'));
     expect(client.apiKey).toBe('config-key');
     expect(client.authToken).toBeNull();
+    expect(client.webhookKey).toBeNull();
     expect(client.baseURL).toBe(ANTHROPIC_BASE_URL);
     expect(client.maxRetries).toBe(0);
     expect(client.logLevel).toBe('off');

@@ -26,13 +26,15 @@ export const ProposalSchema = z
       .max(MAX_ITEMS),
   })
   .superRefine((proposal, ctx) => {
-    const seen = new Set<string>();
-    proposal.selections.forEach((selection, index) => {
-      if (seen.has(selection.candidateId)) {
-        ctx.addIssue({ code: 'custom', path: ['selections', index, 'candidateId'], message: 'Duplicate candidate' });
-      }
-      seen.add(selection.candidateId);
-    });
+    const flagRepeats = <T>(values: readonly T[], path: [string, string], message: string) => {
+      const seen = new Set<T>();
+      values.forEach((value, index) => {
+        if (seen.has(value)) ctx.addIssue({ code: 'custom', path: [path[0], index, path[1]], message });
+        seen.add(value);
+      });
+    };
+    flagRepeats(proposal.selections.map((s) => s.candidateId), ['selections', 'candidateId'], 'Duplicate candidate');
+    flagRepeats(proposal.unmatchedItems.map((u) => u.itemIndex), ['unmatchedItems', 'itemIndex'], 'Duplicate item');
   });
 
 export type Proposal = z.infer<typeof ProposalSchema>;

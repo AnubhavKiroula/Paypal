@@ -327,6 +327,27 @@ describe('ProposalSchema duplicate-candidate detection', () => {
   });
 });
 
+describe('ProposalSchema duplicate-item detection', () => {
+  const duplicateItemAt = (index: number) => ({
+    code: 'custom',
+    path: ['unmatchedItems', index, 'itemIndex'],
+    message: 'Duplicate item',
+  });
+
+  it('flags every later occurrence of the same itemIndex, whatever the reason', () => {
+    const value = proposal({ unmatchedItems: [unmatched(0, 'a'), unmatched(1), unmatched(0, 'b'), unmatched(0)] });
+    expect(issuesOf(ProposalSchema, value)).toEqual([duplicateItemAt(2), duplicateItemAt(3)]);
+  });
+
+  it('reports duplicate candidates and duplicate items together', () => {
+    const value = proposal({ selections: [selection(A), selection(A)], unmatchedItems: [unmatched(3), unmatched(3)] });
+    expect(issuesOf(ProposalSchema, value)).toEqual([
+      { code: 'custom', path: ['selections', 1, 'candidateId'], message: 'Duplicate candidate' },
+      duplicateItemAt(1),
+    ]);
+  });
+});
+
 const validCandidate = {
   id: 'cand_A1b2C3d4',
   sourceProductId: 'B07-XYZ_123',
@@ -391,10 +412,10 @@ describe('CandidateSchema field rules', () => {
     ['a sourceProductId at the high end of printable ASCII', candidateWith({ sourceProductId: '~' })],
     ['a 128-character sourceProductId', candidateWith({ sourceProductId: 'x'.repeat(128) })],
     ['an https url with port, query and fragment', candidateWith({ url: 'https://shop.example:8443/p?q=1#f' })],
-    ['an upper-case https scheme', candidateWith({ url: 'HTTPS://shop.example/item/1' })],
     ['a punycode hostname', candidateWith({ url: 'https://xn--bcher-kva.example/' })],
     ['a fetchedAt with milliseconds', candidateWith({ fetchedAt: '2026-10-25T10:00:00.123Z' })],
     ['a zero unitPrice', candidateWith({ unitPrice: money(0) })],
+    ['an empty description', candidateWith({ description: '' })],
   ])('accepts %s unchanged', (_label, value) => {
     expect(CandidateSchema.parse(value)).toEqual(value);
   });
@@ -429,8 +450,32 @@ describe('CandidateSchema field rules', () => {
     ['a number title, which quarantine alone would coerce', { title: 42 }],
     ['a null description', { description: null }],
     ['an array retailer', { retailer: ['Acme'] }],
+    ['a url with a user part that hides the real host', { url: 'https://shop.example@evil.example/x' }],
+    ['a url with a username and password', { url: 'https://user:pw@shop.example/' }],
+    ['a url with only a password', { url: 'https://:pw@shop.example/' }],
+    ['an empty title', { title: '' }],
+    ['a whitespace-only title', { title: '   ' }],
+    ['a title that quarantine empties', { title: cp(0x202e, 0x200b) }],
+    ['an empty retailer', { retailer: '' }],
+    ['a retailer that quarantine empties', { retailer: '<b></b>' }],
   ])('rejects %s', (_label, overrides) => {
     expect(CandidateSchema.safeParse(candidateWith(overrides)).success).toBe(false);
+  });
+
+  it.each([
+    ['HTTPS://shop.example/item/1', 'https://shop.example/item/1'],
+    ['https://SHOP.example', 'https://shop.example/'],
+    ['https:shop.example', 'https://shop.example/'],
+    ['https:/shop.example', 'https://shop.example/'],
+  ])('stores %s in canonical form', (url, expected) => {
+    expect(CandidateSchema.parse(candidateWith({ url })).url).toBe(expected);
+  });
+
+  it('reports credentials as a url issue with a fixed message', () => {
+    const result = CandidateSchema.safeParse(candidateWith({ url: 'https://a@b.example/' }));
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['url'], message: 'URL must not contain credentials' }) as unknown,
+    ]);
   });
 
   it('trims surrounding whitespace from the url', () => {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { Quarantined } from '@mandate/shared';
+import { type Quarantined, quarantineText } from '@mandate/shared';
 
 export type TrustedPart = { kind: 'trusted'; text: string };
 export type UntrustedPart = { kind: 'untrusted'; label: string; text: Quarantined<string> };
@@ -32,6 +32,11 @@ export class NonceExhaustedError extends Error {
 export function renderUntrustedBlock(part: UntrustedPart, nonceSource: NonceSource = cryptoNonceSource): string {
   if (!LABEL.test(part.label)) {
     throw new RangeError('Untrusted block label must match /^[a-z][a-z0-9_]{0,31}$/');
+  }
+  // The brand is compile-time only, and a cast can forge it. Quarantined text is a fixed point of
+  // quarantineText (property-tested), so any text it would still change was never quarantined.
+  if (quarantineText(part.text, { maxCodePoints: Number.MAX_SAFE_INTEGER }).text !== part.text) {
+    throw new TypeError('Untrusted part text was not produced by quarantineText');
   }
   const haystack = part.text.toLowerCase();
   for (let attempt = 0; attempt < MAX_NONCE_ATTEMPTS; attempt++) {

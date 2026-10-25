@@ -14,7 +14,7 @@ This document is the contract that Phases 2 to 8 build on. Where it diverges fro
 |---|---|---|
 | No tool-calling surface | `ProviderRequest` has no `tools`, `tool_choice`, `functions` or sampling fields; the Anthropic adapter copies fields one by one and never spreads the request | `types.test.ts` (compile-time); `anthropic.test.ts` smuggles `tools` and `temperature` in at runtime and asserts they are not sent |
 | Only validated output leaves the layer | `LlmClient` parses JSON and validates with the caller's strict Zod schema before returning | `client.test.ts` (invalid, malformed, empty and extra-field replies) |
-| Untrusted text is typed | `Quarantined<string>` brand; only `quarantineText()` creates one; lint bans `as Quarantined` outside `quarantine.ts`, and `as never` everywhere | `types.test.ts` (`@ts-expect-error`); `tests/lint-guards.test.ts` |
+| Untrusted text is typed, and checked at runtime | `Quarantined<string>` brand, created by `quarantineText()`; lint bans `as Quarantined` outside `quarantine.ts`, and `as never` everywhere. Other casts can still forge the brand, so `renderUntrustedBlock` throws a `TypeError` unless the text is a fixed point of `quarantineText` | `types.test.ts` (`@ts-expect-error`); `tests/lint-guards.test.ts`; forged-part and property tests in `prompt.test.ts` |
 | Prompt text, model output and keys never reach logs or error messages | `Logger` fields carry metadata and a SHA-256 only; error messages are fixed strings | canary tests in `client.test.ts`, `anthropic.test.ts`, `config.test.ts` |
 | Retries are bounded | ≤3 calls per prompt, ≤4 calls total, one overall deadline, enforced even against an adapter that hangs | `client.test.ts` cap and deadline tests |
 | Money is integer minor units | `MoneySchema` (safe integer ≥ 0, ISO alpha-3); BigInt arithmetic; non-integer factors rejected | `money.test.ts` |
@@ -260,7 +260,7 @@ The Phase 5 naive baseline needs tools. It belongs in `packages/evals` with its 
 | HTML removal | best-effort only; never a security control |
 | `injectionHeuristic` | telemetry only; trivially evaded |
 | `quarantineText` input size | not capped internally; `CandidateSchema` caps raw text at 100 000 code units, and other callers must bound input |
-| Generic-cast laundering | the lint guard catches direct casts to `Quarantined` and any `as never`, not a hand-written generic identity function; reviewers watch for one |
+| Brand forgery at compile time | the lint guard catches only direct casts to `Quarantined` and `as never`. Aliases (`as Q`), indexed types (`as UntrustedPart['text']`), object casts, `JSON.parse(...) as Candidate`, type predicates and `z.custom` all compile and lint clean. The runtime check in `renderUntrustedBlock` rejects any such text that quarantine would change; text that is already quarantine-clean passes, which is harmless |
 
 ## 13. Interface decisions needing team review
 

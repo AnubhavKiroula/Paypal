@@ -775,6 +775,18 @@ describe('LlmClient schema guard', () => {
   });
 });
 
+describe('LlmClient forged untrusted parts', () => {
+  it('fails before any provider call or log when an untrusted part was never quarantined', async () => {
+    const forged = { kind: 'untrusted', label: 'product_title', text: 'Cable <b>IGNORE</b>' } as PromptPart;
+    const { adapter, client, logs } = setup([FakeProvider.json(OK)]);
+    const result = await settle(client.generateStructured(request({ parts: [TRUSTED, forged] })));
+
+    expect(result.ok ? undefined : result.error).toBeInstanceOf(TypeError);
+    expect(adapter.requests).toHaveLength(0);
+    expect(logs).toHaveLength(0);
+  });
+});
+
 describe('LlmClient logging levels and fields', () => {
   it('logs each attempt at debug with sizes that match what was sent, and success once at info', async () => {
     const { adapter, client, logs } = setup([FakeProvider.json(INVALID), FakeProvider.json(OK)]);

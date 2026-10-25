@@ -64,8 +64,6 @@ interface RunState {
   promptSha256: string | undefined;
 }
 
-const NEVER = new Promise<never>(() => undefined);
-
 export class LlmClient {
   private readonly adapter: ProviderAdapter;
   private readonly logger: Logger;
@@ -224,7 +222,8 @@ export class LlmClient {
         call.abort();
         throw new ProviderError('PROVIDER_TIMEOUT');
       },
-      () => NEVER,
+      // A fresh pending promise per call. A shared one would hold every settled race, and its response, forever.
+      () => new Promise<never>(() => undefined),
     );
 
     try {

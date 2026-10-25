@@ -32,7 +32,7 @@ export interface LlmClientOptions {
 export interface StructuredRequest<S extends z.ZodType> {
   /** Short identifier for logs, e.g. "purchase_intent". */
   schemaName: string;
-  /** Must be transform-free and strict at every level. */
+  /** Must be value-faithful (parsing only accepts or rejects) and strict at every level. */
   schema: S;
   /** Trusted instructions. */
   system: string;
@@ -262,34 +262,44 @@ function sha256(system: string, userText: string): string {
   return createHash('sha256').update(system).update('\n--- user ---\n').update(userText).digest('hex');
 }
 
-/**
- * The schema must be transform-free (output mode throws on transforms) and closed at every level.
- * Strictness is checked in input mode: output mode marks even non-strict objects closed.
- */
 function toStrictJsonSchema(schemaName: string, schema: z.ZodType): Record<string, unknown> {
-  let input: Record<string, unknown>;
+  if (!(schema instanceof z.ZodObject)) throw new SchemaNotSupportedError(schemaName, 'the root must be an object');
+  assertValueFaithful(schemaName, schema, '(root)');
   try {
-    z.toJSONSchema(schema, { unrepresentable: 'throw', io: 'output' });
-    input = z.toJSONSchema(schema, { unrepresentable: 'throw', io: 'input' });
+    return z.toJSONSchema(schema, { unrepresentable: 'throw', io: 'input' });
   } catch (error) {
     throw new SchemaNotSupportedError(schemaName, error instanceof Error ? error.message : 'not representable');
   }
-  if (input['type'] !== 'object') throw new SchemaNotSupportedError(schemaName, 'the root must be an object');
-  assertClosedObjects(schemaName, input);
-  return input;
 }
 
-function assertClosedObjects(schemaName: string, node: unknown): void {
-  if (Array.isArray(node)) {
-    for (const child of node) assertClosedObjects(schemaName, child);
-    return;
+/** Leaf types whose parse can only accept or reject a JSON value. Matched on def.type: ZodURL is not a ZodString. */
+const FAITHFUL_LEAF_TYPES: ReadonlySet<string> = new Set(['string', 'number', 'boolean', 'literal', 'enum', 'null']);
+
+/**
+ * Walks the schema against an allow-list so the returned data is exactly the model's JSON. Zod's
+ * JSON Schema export does not catch this: catch, codec, preprocess, coerce and overwrite (which
+ * also implements trim and toLowerCase) all export cleanly. Refinements are allowed: they only reject.
+ */
+function assertValueFaithful(schemaName: string, schema: z.core.$ZodType, path: string): void {
+  const def = schema._zod.def;
+  const reject = (reason: string): never => {
+    throw new SchemaNotSupportedError(schemaName, `${path}: ${reason}`);
+  };
+  if (def.checks?.some((check) => check._zod.def.check === 'overwrite')) reject('a check rewrites the value');
+  if (schema instanceof z.ZodObject) {
+    if (!(schema.def.catchall instanceof z.ZodNever)) reject('every object must be strict');
+    for (const [key, child] of Object.entries<z.core.$ZodType>(schema.shape)) assertValueFaithful(schemaName, child, `${path}.${key}`);
+  } else if (schema instanceof z.ZodArray) {
+    assertValueFaithful(schemaName, schema.element, `${path}[]`);
+  } else if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
+    assertValueFaithful(schemaName, schema.unwrap(), path);
+  } else if (schema instanceof z.ZodUnion) {
+    for (const option of schema.options) assertValueFaithful(schemaName, option, path);
+  } else if (!FAITHFUL_LEAF_TYPES.has(def.type)) {
+    reject(`${def.type} is not on the allow-list`);
+  } else if ('coerce' in def && def.coerce === true) {
+    reject('coercion rewrites the value');
   }
-  if (node === null || typeof node !== 'object') return;
-  const record = node as Record<string, unknown>;
-  if (record['type'] === 'object' && record['additionalProperties'] !== false) {
-    throw new SchemaNotSupportedError(schemaName, 'every object must be strict');
-  }
-  for (const child of Object.values(record)) assertClosedObjects(schemaName, child);
 }
 
 function validate<S extends z.ZodType>(schema: S, text: string): Validation<z.output<S>> {

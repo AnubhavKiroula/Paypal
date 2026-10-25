@@ -77,7 +77,7 @@ All model-facing schemas use `z.strictObject` at every level, so extra fields ar
 | `MoneySchema` | `{ amountMinor: safe int ≥ 0, currency: /^[A-Z]{3}$/ }` | `addMoney` and `multiplyMoney(m, qty)` use BigInt and throw `MoneyError` on `OVERFLOW`, `CURRENCY_MISMATCH` and `INVALID_FACTOR`. A fractional factor is rejected because minor units cannot be rounded |
 | `PurchaseIntentSchema` | `{ schemaVersion: '1', items[≤20]: { description 1..200, quantity 1..10 000, category?, maxUnitPrice?: Money, neededBy?: ISO date }, clarifications[≤5], needsClarification }` | It is either items, or a clarification request with at least one question |
 | `ProposalSchema` | `{ selections[≤20]: { candidateId, quantity 1..10 000, reason 1..300 }, unmatchedItems[≤20]: { itemIndex, reason } }` | No prices, no totals (ADR 0004). A repeated `candidateId` or a repeated `itemIndex` is rejected. `reason` is model-written text, so treat it as untrusted wherever it is shown or reused |
-| `CandidateSchema` | `{ id, sourceProductId, retailer, unitPrice: Money, url, fetchedAt (ISO), title, description }` | **Not model-facing.** `retailer`, `title` and `description` pass through `quarantineText` as a transform, so the parsed type is `Quarantined<string>`; `retailer` and `title` must keep some text after quarantine. `url` is https only, rejects credentials (`https://shop.example@evil.example` opens evil.example) and is stored in canonical `URL.href` form. Because of that transform it cannot be exported as JSON Schema, and `LlmClient` rejects it as a response schema |
+| `CandidateSchema` | `{ id, sourceProductId, retailer, unitPrice: Money, url, fetchedAt (ISO), title, description }` | **Not model-facing.** `retailer`, `title` and `description` pass through `quarantineText` as a transform, so the parsed type is `Quarantined<string>`; `retailer` and `title` must keep some text after quarantine. `url` is https only, rejects credentials (`https://shop.example@evil.example` opens evil.example) and is stored in canonical `URL.href` form. Because of that transform `LlmClient` rejects it as a response schema |
 
 The quantity cap of 10 000 is a sanity bound, not a plausibility rule. Per the ER doc, an implausible quantity is a *policy reason*, so an injected "buy 10" must reach the policy engine and be denied with a reason rather than fail schema validation.
 
@@ -144,7 +144,7 @@ Consequences:
 
 ```mermaid
 flowchart TD
-  G["guard: schema transform-free and strict at every level"] --> C["call provider (≤3 transport tries per prompt)"]
+  G["guard: schema value-faithful and strict at every level"] --> C["call provider (≤3 transport tries per prompt)"]
   C --> S{"stop reason"}
   S -->|refusal| R["REFUSAL"]
   S -->|context window| X["CONTEXT_TOO_LARGE"]
@@ -172,7 +172,7 @@ flowchart TD
 
 **Native structured output.** The Anthropic adapter sends `output_config.format = { type: 'json_schema', schema }`, not a tool. The SDK helper `transformJSONSchema` moves keywords the API does not enforce (minimum, maximum, maxLength, pattern, `minItems > 1`) into descriptions. **The API therefore guarantees shape, not bounds; the Zod validation in `LlmClient` is authoritative.**
 
-**Response schema requirements.** A response schema must be transform-free: Zod's output-mode JSON Schema export throws on transforms. It must also be strict at every level. Strictness is checked on the **input-mode** export, because output mode marks even a plain `z.object` as closed. Violations throw `SchemaNotSupportedError` before any provider call.
+**Response schema requirements.** A response schema must be **value-faithful**: parsing may accept or reject the model's JSON but never rewrite it, so `data` is exactly what the model sent. `LlmClient` walks the schema against an allow-list: a strict object at the root and at every level (`catchall` never), arrays, optional, nullable, unions, and the leaf types string (any format), number, boolean, literal, enum and null. Refinements are allowed because they only reject. Everything else throws `SchemaNotSupportedError` before any provider call, naming the path: transform, pipe, preprocess, codec, `catch`, `default`, `prefault`, `z.coerce.*`, `.overwrite()` (which also implements `.trim()` and `.toLowerCase()`), `unknown`, `any`, record, lazy, readonly and custom. The guard does not rely on Zod's JSON Schema export, which exports `catch`, codecs, preprocess, coercion and overwrite without error (checked on zod 4.6.7).
 
 ## 7. Errors
 

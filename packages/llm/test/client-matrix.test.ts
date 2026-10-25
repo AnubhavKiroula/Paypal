@@ -708,9 +708,27 @@ describe('LlmClient schema guard', () => {
     ['an array root', z.array(Answer), 'the root must be an object'],
     ['a string root', z.string(), 'the root must be an object'],
     ['a union root', z.union([Answer, z.strictObject({ other: z.string() })]), 'the root must be an object'],
-    ['a record field', z.strictObject({ tags: z.record(z.string(), z.int()) }), 'every object must be strict'],
+    ['a record field', z.strictObject({ tags: z.record(z.string(), z.int()) }), '(root).tags: record is not on the allow-list'],
     ['an array of non-strict objects', z.strictObject({ items: z.array(z.object({ n: z.int() })) }), 'every object must be strict'],
-    ['an unrepresentable date field', z.strictObject({ at: z.date() }), 'cannot be represented'],
+    ['a date field', z.strictObject({ at: z.date() }), '(root).at: date is not on the allow-list'],
+    ['a loose object', z.strictObject({ inner: z.looseObject({ n: z.int() }) }), '(root).inner: every object must be strict'],
+    ['a catch fallback', z.strictObject({ n: z.int().min(1).catch(1) }), '(root).n: catch is not on the allow-list'],
+    ['a default', z.strictObject({ n: z.int().default(1) }), '(root).n: default is not on the allow-list'],
+    ['a prefault', z.strictObject({ n: z.int().prefault(1) }), '(root).n: prefault is not on the allow-list'],
+    ['a transform', z.strictObject({ s: z.string().transform((s) => s.length) }), '(root).s: pipe is not on the allow-list'],
+    ['a preprocess', z.strictObject({ n: z.preprocess((v) => v, z.int()) }), '(root).n: pipe is not on the allow-list'],
+    ['a codec', z.strictObject({ n: z.codec(z.string(), z.int(), { decode: Number, encode: String }) }), '(root).n: pipe is not on the allow-list'],
+    ['a coerced number', z.strictObject({ n: z.coerce.number().int() }), '(root).n: coercion rewrites the value'],
+    ['a coerced boolean', z.strictObject({ b: z.coerce.boolean() }), '(root).b: coercion rewrites the value'],
+    ['an overwrite', z.strictObject({ n: z.number().overwrite((n) => n * 100) }), '(root).n: a check rewrites the value'],
+    ['a trimmed string', z.strictObject({ items: z.array(z.string().trim()) }), '(root).items[]: a check rewrites the value'],
+    ['an unknown field', z.strictObject({ payload: z.unknown() }), '(root).payload: unknown is not on the allow-list'],
+    ['an any array', z.strictObject({ list: z.array(z.any()) }), '(root).list[]: any is not on the allow-list'],
+    ['a lazy field', z.strictObject({ s: z.lazy(() => z.string()) }), '(root).s: lazy is not on the allow-list'],
+    ['a readonly field', z.strictObject({ inner: z.strictObject({}).readonly() }), '(root).inner: readonly is not on the allow-list'],
+    ['a custom field', z.strictObject({ c: z.custom<string>(() => true) }), '(root).c: custom is not on the allow-list'],
+    ['an optional rewriting field', z.strictObject({ n: z.int().catch(0).optional() }), '(root).n: catch is not on the allow-list'],
+    ['a rewriting union option', z.strictObject({ u: z.union([z.string(), z.coerce.number()]) }), '(root).u: coercion rewrites the value'],
   ])('rejects %s before any provider call or log', async (_label, schema, reason) => {
     const { adapter, client, logs } = setup([FakeProvider.json(OK)]);
     const result = await settle(client.generateStructured({ ...request(), schema }));
@@ -721,6 +739,26 @@ describe('LlmClient schema guard', () => {
     expect(message).toContain(reason);
     expect(adapter.requests).toHaveLength(0);
     expect(logs).toHaveLength(0);
+  });
+
+  it('accepts refinements, unions, enums, literals, nullables and string formats, and returns the JSON as sent', async () => {
+    const Rich = z
+      .strictObject({
+        kind: z.discriminatedUnion('t', [z.strictObject({ t: z.literal('a'), n: z.int() }), z.strictObject({ t: z.literal('b') })]),
+        size: z.enum(['s', 'm']),
+        note: z.string().max(5).nullable(),
+        on: z.iso.date().optional(),
+        site: z.url(),
+        flag: z.boolean(),
+        none: z.null(),
+      })
+      .superRefine((value, ctx) => {
+        if (value.size === 'm' && value.note === null) ctx.addIssue({ code: 'custom', message: 'note required' });
+      });
+    const sent = { kind: { t: 'a', n: 3 }, size: 's', note: null, on: '2026-10-25', site: 'https://x.example', flag: true, none: null };
+    const { client } = setup([FakeProvider.json(sent)]);
+    const result = await client.generateStructured({ ...request(), schemaName: 'rich', schema: Rich });
+    expect(result.data).toStrictEqual(sent);
   });
 
   it('accepts strict objects nested inside arrays and sends their closed JSON Schema', async () => {

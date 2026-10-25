@@ -202,6 +202,9 @@ describe('toProviderError edge cases', () => {
     ['negative retry-after-ms', { 'retry-after-ms': '-10', 'retry-after': '4' }, 4_000],
     ['valid retry-after-ms wins over retry-after', { 'retry-after-ms': '250', 'retry-after': '4' }, 250],
     ['zero retry-after-ms', { 'retry-after-ms': '0', 'retry-after': '4' }, 0],
+    ['empty retry-after-ms (falls back, not 0)', { 'retry-after-ms': '', 'retry-after': '4' }, 4_000],
+    ['blank retry-after-ms (falls back, not 0)', { 'retry-after-ms': '   ', 'retry-after': '4' }, 4_000],
+    ['empty retry-after-ms alone', { 'retry-after-ms': '' }, undefined],
     ['infinite retry-after seconds', { 'retry-after': 'Infinity' }, undefined],
   ])('handles %s on a 503', (_label, entries, expected) => {
     const raw = new InternalServerError(503, apiBody, 'busy', new Headers({ 'request-id': 'req_9', ...entries }));

@@ -143,7 +143,9 @@ export function toProviderError(error: unknown, now: number): unknown {
 
 /** Supports retry-after-ms, retry-after in seconds, and retry-after as an HTTP date. */
 export function parseRetryAfterMs(headers: Headers | undefined, now: number): number | undefined {
-  const ms = Number(headers?.get('retry-after-ms') ?? Number.NaN);
+  const rawMs = headers?.get('retry-after-ms')?.trim();
+  // A blank retry-after-ms counts as absent, as a blank retry-after does; Number('') would be 0.
+  const ms = rawMs ? Number(rawMs) : Number.NaN;
   if (Number.isFinite(ms) && ms >= 0) return ms;
   const raw = headers?.get('retry-after');
   if (raw === null || raw === undefined || raw.trim() === '') return undefined;

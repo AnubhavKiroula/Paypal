@@ -1,0 +1,27 @@
+# Graphify output (machine-specific, regenerate with /graphify .)
+graphify-out/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Secrets - never commit. Use .env.example instead.
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+.vite/
+
+# Test and coverage output
+coverage/
+playwright-report/
+test-results/
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+.idea/
+*.swp

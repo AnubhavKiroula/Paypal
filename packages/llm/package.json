@@ -7,7 +7,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "smoke:offline": "vitest run --config vitest.smoke.config.ts smoke/offline.smoke.test.ts",
+    "smoke:live": "vitest run --config vitest.smoke.config.ts --reporter=verbose smoke/live.smoke.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.3.0",

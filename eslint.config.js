@@ -1,6 +1,7 @@
 import js from '@eslint/js';
 import { defineConfig, globalIgnores } from 'eslint/config';
 import tseslint from 'typescript-eslint';
+import { typeSafetyGuards } from './eslint/type-safety-guards.js';
 
 export default defineConfig(
   globalIgnores(['**/node_modules/', '**/dist/', '**/coverage/', 'graphify-out/']),
@@ -9,7 +10,7 @@ export default defineConfig(
   {
     languageOptions: {
       parserOptions: {
-        projectService: { allowDefaultProject: ['*.js'] },
+        projectService: { allowDefaultProject: ['*.js', 'eslint/*.js'] },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -22,6 +23,7 @@ export default defineConfig(
       ],
     },
   },
+  typeSafetyGuards,
   {
     files: ['**/*.js'],
     extends: [tseslint.configs.disableTypeChecked],

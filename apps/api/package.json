@@ -11,7 +11,8 @@
     "dev": "node --watch --env-file-if-exists=../../.env --import ./scripts/resolve-ts.ts src/server.ts",
     "start": "node --env-file-if-exists=../../.env --import ./scripts/resolve-ts.ts src/server.ts",
     "db:migrate": "node --env-file-if-exists=../../.env --import ./scripts/resolve-ts.ts scripts/db.ts migrate",
-    "db:seed": "node --env-file-if-exists=../../.env --import ./scripts/resolve-ts.ts scripts/db.ts seed"
+    "db:seed": "node --env-file-if-exists=../../.env --import ./scripts/resolve-ts.ts scripts/db.ts seed",
+    "smoke:deployed": "node --import ./scripts/resolve-ts.ts scripts/smoke-deployed.ts"
   },
   "dependencies": {
     "@fastify/cors": "11.3.1",

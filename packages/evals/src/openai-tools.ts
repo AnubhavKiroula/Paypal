@@ -1,4 +1,4 @@
-import type { ReasoningEffort } from '@mandate/llm';
+import { type ReasoningEffort, trimTrailingSlashes } from '@mandate/llm';
 import { z } from 'zod';
 import type { ToolModel, ToolModelRequest, ToolModelResult } from './models.js';
 
@@ -47,7 +47,7 @@ export class OpenAICompatibleToolModel implements ToolModel {
   }) {
     if (!options.apiKey) throw new Error('OpenAICompatibleToolModel needs an API key');
     this.model = options.model;
-    this.#endpoint = `${options.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    this.#endpoint = `${trimTrailingSlashes(options.baseUrl)}/chat/completions`;
     this.#apiKey = options.apiKey;
     this.#maxTokens = options.maxTokens ?? 8_192;
     this.#reasoningEffort = options.reasoningEffort;

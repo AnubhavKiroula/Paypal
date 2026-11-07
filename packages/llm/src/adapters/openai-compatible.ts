@@ -3,7 +3,7 @@ import type { LlmConfig, ReasoningEffort, Secret } from '../config.js';
 import { ProviderError, type ProviderErrorCode, type ProviderErrorDetails } from '../errors.js';
 import type { ProviderAdapter, ProviderRequest, ProviderResponse, StopReason } from '../provider.js';
 import { AbortedError, type Clock, defaultSleep, type Sleep, systemClock } from '../time.js';
-import { parseRetryAfterMs } from './http.js';
+import { parseRetryAfterMs, trimTrailingSlashes } from './http.js';
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -50,7 +50,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
   constructor(options: OpenAICompatibleAdapterOptions) {
     this.model = options.model;
-    this.#endpoint = `${options.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    this.#endpoint = `${trimTrailingSlashes(options.baseUrl)}/chat/completions`;
     this.#apiKey = options.apiKey;
     this.#reasoningEffort = options.reasoningEffort;
     this.#intervalMs = options.requestsPerMinute ? Math.ceil(60_000 / options.requestsPerMinute) : 0;

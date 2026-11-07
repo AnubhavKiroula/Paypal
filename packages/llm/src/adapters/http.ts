@@ -14,3 +14,13 @@ export function parseRetryAfterMs(headers: Headers | undefined, now: number): nu
   const date = Date.parse(raw);
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 }
+
+/**
+ * Drops trailing '/' characters in linear time. A regex such as /\/+$/ is quadratic on a long run of
+ * slashes that is not at the end (CodeQL js/polynomial-redos), so base URLs are trimmed with a loop.
+ */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end--;
+  return value.slice(0, end);
+}

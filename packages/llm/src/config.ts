@@ -1,5 +1,6 @@
 import { inspect } from 'node:util';
 import { z } from 'zod';
+import { trimTrailingSlashes } from './adapters/http.js';
 
 const REDACTED = '[REDACTED]';
 
@@ -79,7 +80,7 @@ const BaseUrlSchema = z
     const secure = url.protocol === 'https:' || (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname));
     return secure && url.username === '' && url.password === '' && url.search === '' && url.hash === '';
   })
-  .transform((value) => value.replace(/\/+$/, ''));
+  .transform(trimTrailingSlashes);
 
 const ModelSchema = z.string().regex(/^[A-Za-z0-9._:/-]{1,100}$/);
 

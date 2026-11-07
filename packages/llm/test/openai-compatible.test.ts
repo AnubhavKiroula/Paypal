@@ -1,6 +1,7 @@
 import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { createAdapter } from '../src/adapters/create.js';
+import { trimTrailingSlashes } from '../src/adapters/http.js';
 import { type FetchLike, OpenAICompatibleAdapter } from '../src/adapters/openai-compatible.js';
 import { Secret, loadLlmConfig } from '../src/config.js';
 import { ProviderError, type ProviderErrorCode } from '../src/errors.js';
@@ -272,5 +273,38 @@ describe('OpenAICompatibleAdapter: configuration', () => {
     const adapter = OpenAICompatibleAdapter.fromConfig(config);
     expect(adapter).toMatchObject({ provider: 'openai-compatible', model: MODEL });
     expect(`${JSON.stringify(adapter)} ${inspect(adapter, { depth: 10, showHidden: true })}`).not.toContain(KEY);
+  });
+});
+
+describe('base URL trimming (CodeQL js/polynomial-redos)', () => {
+  // A long run of slashes that is not at the end made /\/+$/ retry from every position: quadratic time.
+  const hostile = `https://example.com/${'/'.repeat(100_000)}x`;
+
+  it('trims trailing slashes in linear time in the adapter', () => {
+    const started = performance.now();
+    const adapter = new OpenAICompatibleAdapter({ baseUrl: hostile, model: MODEL, apiKey: new Secret(KEY) });
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(adapter.model).toBe(MODEL);
+  });
+
+  it('trims trailing slashes in linear time in the config loader, and still drops them', () => {
+    const started = performance.now();
+    expect(() => loadLlmConfig({ LLM_PROVIDER: 'openai-compatible', LLM_BASE_URL: hostile, LLM_MODEL: MODEL, LLM_API_KEY: KEY })).not.toThrow();
+    expect(performance.now() - started).toBeLessThan(200);
+    const config = loadLlmConfig({ LLM_PROVIDER: 'openai-compatible', LLM_BASE_URL: `${BASE}///`, LLM_MODEL: MODEL, LLM_API_KEY: KEY });
+    expect(config.provider === 'openai-compatible' && config.baseUrl).toBe(BASE);
+  });
+});
+
+describe('trimTrailingSlashes', () => {
+  it.each([
+    ['https://a.test/v1', 'https://a.test/v1'],
+    ['https://a.test/v1/', 'https://a.test/v1'],
+    ['https://a.test/v1///', 'https://a.test/v1'],
+    ['https://a.test//v1', 'https://a.test//v1'],
+    ['///', ''],
+    ['', ''],
+  ])('%j -> %j', (input, expected) => {
+    expect(trimTrailingSlashes(input)).toBe(expected);
   });
 });

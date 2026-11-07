@@ -70,3 +70,11 @@ describe('OpenAICompatibleToolModel', () => {
     expect(models.provider(scenario).provider).toBe('openai-compatible');
   });
 });
+
+describe('OpenAICompatibleToolModel base URL (CodeQL js/polynomial-redos)', () => {
+  it('trims trailing slashes in linear time', () => {
+    const started = performance.now();
+    new OpenAICompatibleToolModel({ baseUrl: `https://example.com/${'/'.repeat(100_000)}x`, model: 'm', apiKey: KEY });
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+});

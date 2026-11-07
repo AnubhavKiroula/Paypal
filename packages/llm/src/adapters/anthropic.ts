@@ -12,6 +12,9 @@ import type { LlmConfig, Secret } from '../config.js';
 import { ProviderError, type ProviderErrorDetails } from '../errors.js';
 import type { ProviderAdapter, ProviderRequest, ProviderResponse, StopReason } from '../provider.js';
 import { type Clock, systemClock } from '../time.js';
+import { parseRetryAfterMs } from './http.js';
+
+export { parseRetryAfterMs } from './http.js';
 
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 
@@ -166,19 +169,4 @@ export function toProviderError(error: unknown, now: number): ProviderError {
     return new ProviderError('CONTEXT_TOO_LARGE', details);
   }
   return new ProviderError('PROVIDER_BAD_REQUEST', details);
-}
-
-/** Supports retry-after-ms, retry-after in seconds, and retry-after as an HTTP date. */
-export function parseRetryAfterMs(headers: Headers | undefined, now: number): number | undefined {
-  const rawMs = headers?.get('retry-after-ms')?.trim();
-  // A blank retry-after-ms counts as absent, as a blank retry-after does; Number('') would be 0.
-  const ms = rawMs ? Number(rawMs) : Number.NaN;
-  if (Number.isFinite(ms) && ms >= 0) return ms;
-  const raw = headers?.get('retry-after');
-  if (raw === null || raw === undefined || raw.trim() === '') return undefined;
-  const seconds = Number(raw);
-  // A numeric value never falls through to Date.parse, which leniently accepts strings such as "-1".
-  if (!Number.isNaN(seconds)) return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1_000 : undefined;
-  const date = Date.parse(raw);
-  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 }

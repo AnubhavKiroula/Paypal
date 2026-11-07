@@ -1,11 +1,13 @@
 import { BadRequestError } from '@anthropic-ai/sdk';
 import { type TestContext, afterAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { AnthropicAdapter, createAnthropicClient } from '../src/adapters/anthropic.js';
+import { createAnthropicClient } from '../src/adapters/anthropic.js';
+import { createAdapter } from '../src/adapters/create.js';
 import { LlmClient } from '../src/client.js';
 import { type LlmConfig, LlmConfigError, loadLlmConfig } from '../src/config.js';
 
-// One real, tiny structured call plus one sampling-parameter probe. Never runs in CI.
+// One real, tiny structured call through the adapter LLM_PROVIDER names, plus (Anthropic only) one
+// sampling-parameter probe. Never runs in CI.
 // Without a key it prints SKIPPED and every test reports as skipped, never as passed.
 
 function resolveConfig(): { config?: LlmConfig; skipReason?: string } {
@@ -13,8 +15,9 @@ function resolveConfig(): { config?: LlmConfig; skipReason?: string } {
   try {
     return { config: loadLlmConfig(process.env) };
   } catch (error) {
-    if (error instanceof LlmConfigError && error.variables.length === 1 && error.variables[0] === 'ANTHROPIC_API_KEY') {
-      return { skipReason: 'ANTHROPIC_API_KEY is not set' };
+    const keys = ['ANTHROPIC_API_KEY', 'LLM_API_KEY'];
+    if (error instanceof LlmConfigError && error.variables.length === 1 && keys.includes(error.variables[0] ?? '')) {
+      return { skipReason: `${error.variables[0] ?? ''} is not set` };
     }
     throw error;
   }
@@ -40,7 +43,7 @@ describe('live smoke (real provider)', () => {
   it('makes one schema-valid structured call with usage and latency recorded', async (context) => {
     if (config === undefined) skipLive(context);
     const client = new LlmClient({
-      adapter: AnthropicAdapter.fromConfig(config),
+      adapter: createAdapter(config),
       timeoutMs: config.timeoutMs,
       maxOutputTokens: config.maxOutputTokens,
     });
@@ -64,6 +67,10 @@ describe('live smoke (real provider)', () => {
 
   it('confirms the API rejects sampling parameters (why the adapter never sends temperature)', async (context) => {
     if (config === undefined) skipLive(context);
+    if (config.provider !== 'anthropic') {
+      console.warn(`SKIPPED: the sampling probe is Anthropic-specific (provider is ${config.provider}).`);
+      context.skip('SKIPPED: Anthropic-specific probe');
+    }
     const client = createAnthropicClient(config.apiKey);
     // A non-literal object, so the extra field type-checks; the SDK types have no temperature field.
     const params = {

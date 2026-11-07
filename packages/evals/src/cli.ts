@@ -1,8 +1,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AnthropicAdapter, LlmConfigError, loadLlmConfig } from '@mandate/llm';
+import { createAdapter, LlmConfigError, loadLlmConfig } from '@mandate/llm';
 import { AnthropicToolModel } from './anthropic-tools.js';
+import type { ToolModel } from './models.js';
+import { OpenAICompatibleToolModel } from './openai-tools.js';
 import { renderReport } from './report.js';
 import { CONFIGS, type ConfigName, fakeModels, type ModelSource, runSuite } from './runner.js';
 import type { ScenarioSet } from './scenario.js';
@@ -42,12 +44,20 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 
 export function liveModels(env: Readonly<Record<string, string | undefined>>): ModelSource {
   const config = loadLlmConfig(env);
-  return {
-    mode: 'live',
-    modelId: config.model,
-    toolModel: () => new AnthropicToolModel({ model: config.model, apiKey: config.apiKey.reveal(), maxTokens: config.maxOutputTokens }),
-    provider: () => AnthropicAdapter.fromConfig(config),
-  };
+  // One adapter per run, so its requests-per-minute throttle covers every case of configuration (c).
+  const adapter = createAdapter(config);
+  const toolModel = (): ToolModel =>
+    config.provider === 'anthropic'
+      ? new AnthropicToolModel({ model: config.model, apiKey: config.apiKey.reveal(), maxTokens: config.maxOutputTokens })
+      : new OpenAICompatibleToolModel({
+          baseUrl: config.baseUrl,
+          model: config.model,
+          apiKey: config.apiKey.reveal(),
+          maxTokens: config.maxOutputTokens,
+          timeoutMs: config.timeoutMs,
+          ...(config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort }),
+        });
+  return { mode: 'live', modelId: config.model, toolModel, provider: () => adapter };
 }
 
 export const RESULTS_DIR = fileURLToPath(new URL('../results', import.meta.url));

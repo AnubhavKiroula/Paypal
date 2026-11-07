@@ -13,7 +13,9 @@ services:
     buildCommand: corepack enable && pnpm install --frozen-lockfile
     # Migrations run before the server starts. Safe on every boot: they are idempotent and serialised by an
     # advisory lock, and the deploy fails (keeping the old version live) if a migration fails.
-    startCommand: pnpm db:migrate && pnpm --filter @mandate/api start
+    # The demo seed only inserts missing rows (ON CONFLICT DO NOTHING), so edits made through the app survive a
+    # restart. It runs here because the free plan has no Shell or pre-deploy command to run it once by hand.
+    startCommand: pnpm db:migrate && pnpm db:seed && pnpm --filter @mandate/api start
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
@@ -23,7 +25,7 @@ services:
       # Render routes traffic to 0.0.0.0:$PORT; the API defaults to loopback otherwise.
       - key: HOST
         value: 0.0.0.0
-      # The web app's origin, e.g. https://mandate-web.onrender.com (comma-separate several). Unset: no CORS.
+      # The web app's origin, e.g. https://<web-url> (comma-separate several). Unset: no CORS.
       - key: WEB_ORIGIN
         sync: false
       # Approvals through Zapier (docs/zapier.md): the Catch Hook URL, and the web app URL for review links.
@@ -65,7 +67,7 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 24.16.0
-      # The API's public URL, e.g. https://mandate-api.onrender.com
+      # The API's public URL, e.g. https://<api-url>; copy it from the service page, never guess it
       - key: VITE_API_URL
         sync: false
       - key: VITE_MANDATE_ID

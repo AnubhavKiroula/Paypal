@@ -50,7 +50,7 @@ Zapier and the message service do see the link, so treat approval messages like 
    - Copy the hook URL. It starts with `https://hooks.zapier.com/`.
 2. **Set the API's variables:**
    - `ZAPIER_APPROVAL_WEBHOOK_URL`: the hook URL. Treat it as a secret: anyone holding it can post to the Zap.
-   - `WEB_APP_URL`: the web app's public URL, for example `https://mandate-web.onrender.com`. Use `http://localhost:5173` locally.
+   - `WEB_APP_URL`: the web app's public URL, for example `https://<web-url>` (copy it from the Render service page). Use `http://localhost:5173` locally.
    
    On Render, both are `sync: false` in `render.yaml`.
 3. **Send a sample.** Submit a request that needs approval, for example a 27-inch monitor, a conference speakerphone and a wireless keyboard (over the 300.00 threshold). The Zap's trigger test should show the fields above.

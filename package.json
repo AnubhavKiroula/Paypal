@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "eval": "pnpm --filter @mandate/evals eval",
     "smoke:offline": "pnpm -r --if-present smoke:offline",
-    "smoke:live": "pnpm -r --if-present smoke:live"
+    "smoke:live": "pnpm -r --if-present smoke:live",
+    "smoke:deployed": "pnpm --filter @mandate/api smoke:deployed"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

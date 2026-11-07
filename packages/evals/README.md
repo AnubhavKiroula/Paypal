@@ -14,7 +14,7 @@ All three get the same mandate rules (the seeded demo mandate). A test checks th
 
 ```bash
 pnpm eval                                   # fake mode: scripted replies, tests the harness only
-pnpm eval --live                            # real model; needs ANTHROPIC_API_KEY (LLM_MODEL optional)
+pnpm eval --live                            # real model; needs the LLM_* settings (docs/llm-layer.md section 9)
 pnpm eval --live --sets attack-heldout      # held-out attacks: only when named, never for prompt tuning
 pnpm eval --configs mandate --sets benign
 ```
@@ -76,4 +76,4 @@ A Mandate order that awaits buyer approval on PayPal counts as a **payment attem
 - **No live results yet.** The suites need a `--live` run with a key (see VERIFY in #20).
 - **Synthetic listings.** Results on them may be optimistic (README, risk 6).
 - **The baselines are single-turn.** One tool call per request: no search loop and no retries.
-- **VERIFY:** the first live run must confirm that tool use works with Opus 5.5's always-on thinking within `LLM_MAX_OUTPUT_TOKENS`.
+- **Tool use on NVIDIA / Mistral Large 4** (`OpenAICompatibleToolModel`): a 4-call check on 2026-11-08 (naive and hardened, `benign-01` and `dev-desc-quantity`) returned a valid `pay` call with JSON-object arguments every time, at 6.7-58.7 s per call. A check, not a result. With Anthropic the first live run must still confirm tool use within `LLM_MAX_OUTPUT_TOKENS` (`VERIFY`).

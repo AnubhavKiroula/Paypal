@@ -257,7 +257,7 @@ describe('loadLlmConfig edge cases', () => {
 
   it.each([
     ['LLM_TIMEOUT_MS', '1000', 'timeoutMs', 1_000],
-    ['LLM_TIMEOUT_MS', '120000', 'timeoutMs', 120_000],
+    ['LLM_TIMEOUT_MS', '300000', 'timeoutMs', 300_000],
     ['LLM_MAX_OUTPUT_TOKENS', '256', 'maxOutputTokens', 256],
     ['LLM_MAX_OUTPUT_TOKENS', '16000', 'maxOutputTokens', 16_000],
   ] as const)('accepts %s=%s at the exact bound', (variable, value, field, expected) => {
@@ -266,7 +266,7 @@ describe('loadLlmConfig edge cases', () => {
 
   it.each([
     ['LLM_TIMEOUT_MS', '999'],
-    ['LLM_TIMEOUT_MS', '120001'],
+    ['LLM_TIMEOUT_MS', '300001'],
     ['LLM_MAX_OUTPUT_TOKENS', '255'],
     ['LLM_MAX_OUTPUT_TOKENS', '16001'],
     ['LLM_MAX_OUTPUT_TOKENS', '-256'],

@@ -8,7 +8,10 @@ export {
   parseRetryAfterMs,
   toProviderError,
 } from './adapters/anthropic.js';
+export * from './adapters/create.js';
 export * from './adapters/fake.js';
+export { trimTrailingSlashes } from './adapters/http.js';
+export { type FetchLike as LlmFetch, OpenAICompatibleAdapter, type OpenAICompatibleAdapterOptions } from './adapters/openai-compatible.js';
 export * from './client.js';
 export * from './config.js';
 export * from './errors.js';

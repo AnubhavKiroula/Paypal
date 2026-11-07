@@ -52,8 +52,17 @@ services:
       # webhook route is not registered; the reconcile job still settles orders by polling PayPal.
       - key: PAYPAL_WEBHOOK_ID
         sync: false
-      # LLM provider key (packages/llm).
-      - key: ANTHROPIC_API_KEY
+      # LLM (packages/llm, docs/llm-layer.md section 9): Mistral Large 4 on NVIDIA's API catalog. Only the key
+      # is secret; take the model id from https://integrate.api.nvidia.com/v1/models, never guess it.
+      - key: LLM_PROVIDER
+        value: openai-compatible
+      - key: LLM_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: LLM_MODEL
+        value: mistralai/mistral-large-4-1t-a52b
+      - key: LLM_REASONING_EFFORT
+        value: low
+      - key: LLM_API_KEY
         sync: false
 
   # The web app (apps/web): a static Vite build. VITE_* values are compiled into public JavaScript, so they

@@ -1,4 +1,4 @@
-import { AnthropicAdapter, LlmClient, LlmConfigError, LlmIntentParser, LlmRanker, loadLlmConfig, type Logger, type ProviderAdapter } from '@mandate/llm';
+import { createAdapter, LlmClient, LlmConfigError, LlmIntentParser, LlmRanker, loadLlmConfig, type Logger, type ProviderAdapter } from '@mandate/llm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Db } from './db/db.js';
 import { loadZapierConfig, ZapierApprovalNotifier, ZapierConfigError } from './modules/approvals/zapier.js';
@@ -14,7 +14,7 @@ export interface ComposeOptions {
   env: Env;
   db?: Db;
   log: Pick<FastifyBaseLogger, 'debug' | 'info' | 'warn' | 'error'>;
-  /** Tests inject a scripted provider; production builds the Anthropic adapter from LLM config. */
+  /** Tests inject a scripted provider; production builds the adapter LLM_PROVIDER names. */
   llmAdapter?: ProviderAdapter;
   /** Tests inject a fake fetch for PayPal. */
   paypalFetch?: (url: string, init: RequestInit) => Promise<Response>;
@@ -59,7 +59,7 @@ export function compose(options: ComposeOptions): Composition {
   try {
     const config = loadLlmConfig(env);
     client = new LlmClient({
-      adapter: options.llmAdapter ?? AnthropicAdapter.fromConfig(config),
+      adapter: options.llmAdapter ?? createAdapter(config),
       timeoutMs: config.timeoutMs,
       maxOutputTokens: config.maxOutputTokens,
       logger: llmLogger(log),

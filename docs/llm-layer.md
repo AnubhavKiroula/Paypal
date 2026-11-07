@@ -4,6 +4,8 @@ The LLM layer turns trusted instructions plus quarantined third-party text into 
 `packages/shared` owns money, schemas and untrusted-text quarantine. `packages/llm` owns the provider adapter, prompt rendering, the structured-output client, retries, errors, config and logging.
 This document is the contract that Phases 2 to 8 build on. Where it diverges from the earlier design docs, §13 lists the divergence for team review.
 
+> **Provider change (2026-11-08).** The original plan used Anthropic Claude. The team has no Anthropic API key, so the deployed model is **`mistralai/mistral-large-4-1t-a52b` on NVIDIA's API catalog** (`https://integrate.api.nvidia.com/v1`, OpenAI-compatible), through `OpenAICompatibleAdapter`. The Anthropic adapter is still in the code and tested with fakes, but it has **never run live**. Nothing in this repo should claim Claude produced a result.
+
 **Related:** [ADR 0004](adr/0004-llm-has-no-tools-policy-in-code.md) · [architecture](architecture.md) · [UML](uml.md) · [ER diagram](er-diagram.md) · [tech stack](tech-stack.md) · [CLAUDE.md](../CLAUDE.md)
 
 ---
@@ -207,15 +209,21 @@ Every `LlmError` has `code`, `retryable`, `attempts`, `status` and `requestId`, 
 
 `loadLlmConfig(env = process.env)` is the **only** reader of LLM configuration and of the key. It reads only the object it is given.
 
-| Variable | Default | Rule |
-|---|---|---|
-| `LLM_PROVIDER` | `anthropic` | `anthropic` is the only provider today |
-| `LLM_MODEL` | `claude-opus-5-5` | `[A-Za-z0-9._:-]{1,100}` |
-| `ANTHROPIC_API_KEY` | none (required) | held in a `Secret`: `toJSON`, `toString` and `util.inspect` all print `[REDACTED]`; only `reveal()` returns it |
-| `LLM_TIMEOUT_MS` | `60000` | integer, 1 000–120 000 |
-| `LLM_MAX_OUTPUT_TOKENS` | `8192` | integer, 256–16 000. Opus 5.5 always thinks, and thinking counts toward this budget |
+| Variable | Applies to | Default | Rule |
+|---|---|---|---|
+| `LLM_PROVIDER` | both | `anthropic` | `anthropic` or `openai-compatible`. It picks which variables below are read; the other provider's key is never read |
+| `LLM_MODEL` | both | `claude-opus-5-5` (anthropic); none, required (openai-compatible) | `[A-Za-z0-9._:/-]{1,100}`. Take the id from the provider's own model list (`GET <base>/models`), never guess it |
+| `ANTHROPIC_API_KEY` | anthropic | none (required) | held in a `Secret`: `toJSON`, `toString` and `util.inspect` all print `[REDACTED]`; only `reveal()` returns it |
+| `LLM_BASE_URL` | openai-compatible | none (required) | `https://...`, or `http://` only for `localhost`/`127.0.0.1`/`[::1]` (Ollama). No credentials, query or fragment; a trailing `/` is dropped |
+| `LLM_API_KEY` | openai-compatible | none (required) | held in a `Secret`, sent only as `Authorization: Bearer` |
+| `LLM_REASONING_EFFORT` | openai-compatible | unset (not sent) | `low`, `medium` or `high`, sent as `reasoning_effort`. Set `low` for Mistral Large 4 on NVIDIA (§12) |
+| `LLM_REQUESTS_PER_MINUTE` | openai-compatible | `30` | integer, 1–1 000. Client-side throttle: calls start at least `60 000 / n` ms apart, concurrent calls included |
+| `LLM_TIMEOUT_MS` | both | `120000` | integer, 1 000–300 000. Overall deadline per structured call, retries included |
+| `LLM_MAX_OUTPUT_TOKENS` | both | `8192` | integer, 256–16 000. Reasoning ("thinking") tokens count toward this budget on both providers |
 
-Empty values, as copied from `.env.example`, count as unset. A `LlmConfigError` lists variable **names** only, never values.
+Empty values, as copied from `.env.example`, count as unset. A `LlmConfigError` lists variable **names** only, never values. `createAdapter(config)` is the one place that maps `LLM_PROVIDER` to an adapter; the API (`compose.ts`), the eval CLI and the live smoke all use it.
+
+**`OpenAICompatibleAdapter`** (`src/adapters/openai-compatible.ts`) uses plain `fetch` and no SDK, so nothing is read from the environment implicitly. It posts `/chat/completions` with `model`, `max_tokens`, a system and a user message, `response_format: { type: "json_schema", json_schema: { name: "output", strict: true, schema } }` when a schema is given, and `reasoning_effort` when configured. Nothing else: no `tools`, `tool_choice`, `functions` or sampling fields (a test sends a request object with those smuggled in and checks the body). It reads only `choices[0].message.content`, never `reasoning_content`. HTTP 429 becomes `PROVIDER_RATE_LIMITED` with `Retry-After` in `retryAfterMs`, and `LlmClient`'s existing bounded backoff does the waiting. Error bodies are read only to spot a context-length 400 and are never attached to errors.
 
 **SDK environment isolation.** `createAnthropicClient` pins every option the SDK would otherwise read from the environment:
 
@@ -251,8 +259,13 @@ The Phase 5 naive baseline needs tools. It belongs in `packages/evals` with its 
 
 | Item | Status |
 |---|---|
-| Sampling-parameter rejection, live | `VERIFY`: sourced (§10), not yet observed live |
-| Native structured output with `claude-opus-5-5` end to end | `VERIFY`: run `pnpm smoke:live` |
+| Sampling-parameter rejection, live | `VERIFY`: sourced (§10), not yet observed live (no Anthropic key) |
+| Native structured output with `claude-opus-5-5` end to end | `VERIFY`: never run (no Anthropic key) |
+| NVIDIA + `mistralai/mistral-large-4-1t-a52b`, structured call end to end | **Observed 2026-11-08**: `pnpm smoke:live` with `LLM_PROVIDER=openai-compatible`, `LLM_REASONING_EFFORT=low`: schema-valid on attempt 1, 12.7 s, 110 input / 99 output tokens |
+| Does NVIDIA **enforce** `json_schema` strict? | Likely, from one call: with a prompt that never mentioned JSON, the model returned exactly the odd schema (`{"zq_code":"ZQ-7","n":1}`). NVIDIA's docs do not say. Zod validation and the single repair attempt stay either way |
+| Reasoning eats the output budget | Observed: without `reasoning_effort`, one call spent all 800 `max_tokens` on reasoning and returned empty content after 84.5 s. With `low`: 4.0 s. Keep `LLM_REASONING_EFFORT=low` |
+| NVIDIA free-tier rate limit, 429 body and `Retry-After` | `VERIFY`: not documented on the pages read and never observed. Third-party sites say about 40 requests/minute; the default throttle is 30 |
+| Latency on NVIDIA | Observed 4–59 s per call (single samples). A purchase makes two calls (intent, ranking) |
 | 400 "prompt is too long" wording for CONTEXT_TOO_LARGE | `VERIFY` against a real oversized request |
 | `ANTHROPIC_CUSTOM_HEADERS` | merged by the SDK unconditionally; must not be set in any deployment |
 | Zero-width joiner stripped | breaks emoji ZWJ sequences into separate emoji (acceptable for product text) |

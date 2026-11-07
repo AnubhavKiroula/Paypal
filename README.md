@@ -108,7 +108,7 @@ Full table with alternatives and risks: **[docs/tech-stack.md](docs/tech-stack.m
 | API | Fastify + Zod, modular monolith |
 | Data | Postgres (source of truth), plain SQL migrations with checksums; PGlite (Postgres in WebAssembly) in tests. An Elasticsearch audit mirror is planned, not built |
 | Frontend | React + Vite, AG Grid Community for the requests table |
-| LLM | Anthropic Claude through `@anthropic-ai/sdk`, no tools, native structured output validated by Zod |
+| LLM | `mistralai/mistral-large-4-1t-a52b` on NVIDIA's API catalog (OpenAI-compatible), no tools, strict JSON-schema output validated by Zod. The original plan named Anthropic Claude; we changed provider because the team has no Anthropic API key |
 | Tests / CI | Vitest with coverage floors; GitHub Actions: lint, typecheck, test, CodeQL, secret scan, dependency review |
 | Ops | pino structured logs, Docker Compose locally, Render in production |
 
@@ -150,7 +150,7 @@ Open http://localhost:5173. The person picker in the corner stands in for sign-i
 | Feature | Needs |
 |---|---|
 | Health, mandate setup, dashboard | `DATABASE_URL` (already set for Docker in `.env.example`) |
-| Purchase requests | `ANTHROPIC_API_KEY`, plus `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from a **sandbox** app at developer.paypal.com |
+| Purchase requests | `LLM_PROVIDER=openai-compatible`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` (an NVIDIA API key from build.nvidia.com) and `LLM_REASONING_EFFORT=low` (see `.env.example`), plus `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from a **sandbox** app at developer.paypal.com |
 | Browser access to the API | `WEB_ORIGIN=http://localhost:5173` (already in `.env.example`) |
 | Approval messages | `ZAPIER_APPROVAL_WEBHOOK_URL` and `WEB_APP_URL` ([docs/zapier.md](docs/zapier.md)) |
 | PayPal webhooks | `PAYPAL_WEBHOOK_ID` ([docs/deploy.md](docs/deploy.md)) |
@@ -160,7 +160,7 @@ Open http://localhost:5173. The person picker in the corner stands in for sign-i
 ```bash
 pnpm test && pnpm lint && pnpm typecheck   # what CI runs
 pnpm eval                                  # benchmark harness with scripted replies (tests the harness, not results)
-pnpm eval --live                           # the real benchmark; needs ANTHROPIC_API_KEY
+pnpm eval --live                           # the real benchmark; needs the LLM settings above
 ```
 
 **Try it without the UI:** import [postman/mandate.postman_collection.json](postman/mandate.postman_collection.json) into Postman, set `baseUrl`, and run the folder in order.
@@ -173,7 +173,7 @@ pnpm eval --live                           # the real benchmark; needs ANTHROPIC
 |---|---|
 | Policy engine: budget, per-line cap, categories and caps, approval threshold, quantity, split-purchase detection, price drift | Built; unit and property tests |
 | Purchase flow with budget reservations, idempotency keys and an order state machine | Built; integration tests on real Postgres in CI |
-| LLM intent parser and ranker (no tools; fabricated ids and inflated quantities refused) | Built; tested with a fake model. **Not yet run live** (`VERIFY`) |
+| LLM intent parser and ranker (no tools; fabricated ids and inflated quantities refused) | Built; tested with a fake model. One live structured call verified on NVIDIA with Mistral Large 4 (2026-11-08, `pnpm smoke:live`). The live eval run is still pending (#20) |
 | Catalog | **Offline fixture** with deliberately poisoned listings. Channel3 not integrated (`VERIFY`) |
 | PayPal: create order, capture, read order, webhook signature check, reconciliation | Built against the Orders v2 sandbox API; tested with fakes. **Live sandbox run recorded 2026-11-06** ([docs/spike-results.md](docs/spike-results.md)): a buyer-approved $5.00 order captured `COMPLETED`, and the saved wallet was then charged $5.00 with no buyer present (`COMPLETED`). Run from a laptop with the spike script, not yet through the deployed API (#14). The API uses buyer approval; the saved-wallet path is not wired in yet |
 | Approvals: single-use links, Zapier message, review page | Built; the Zap itself still has to be created ([docs/zapier.md](docs/zapier.md)) |
@@ -188,7 +188,8 @@ Only what the code does today. Planned work is marked as such.
 | Tool | How Mandate uses it | Status |
 |---|---|---|
 | **PayPal** (REST Orders v2, sandbox) | `packages/payments` creates orders with `PayPal-Request-Id` idempotency keys, captures them for the exact approved amount, reads orders to reconcile unknown outcomes, and verifies webhook signatures. Only that package may call PayPal | Built; live sandbox run pending (#9). Agent Toolkit / MCP not used |
-| **Anthropic Claude** (`@anthropic-ai/sdk`) | Intent parsing and ranking with native structured output and no tools; the naive and hardened eval baselines use tool calls, only inside `packages/evals` | Built; live run pending (#21) |
+| **NVIDIA API catalog** (`mistralai/mistral-large-4-1t-a52b`, OpenAI-compatible) | Intent parsing and ranking with strict JSON-schema output and no tools, over plain `fetch`; the naive and hardened eval baselines use tool calls, only inside `packages/evals` | One live structured call and a 4-call tool-use check verified; eval run pending (#20) |
+| **Anthropic Claude** (`@anthropic-ai/sdk`) | The original plan. The adapter is still in the code, tested with fakes | Never run live: no key |
 | **AG Grid Community** | The dashboard's requests table: filters, sorting, keyboard navigation | Built. "AG Studio" not used |
 | **Zapier** | Webhooks by Zapier Catch Hook receives approval requests and messages the approver | API side built; Zap to be created |
 | **Render** | Blueprint for the API, the static web app and Postgres | Written; not deployed |

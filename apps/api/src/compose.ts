@@ -7,6 +7,7 @@ import { MandateService } from './modules/mandates/service.js';
 import { paypalGatewayFromEnv } from './modules/payments/gateway.js';
 import { PurchaseService } from './modules/purchases/service.js';
 import { PaypalWebhookHandler } from './modules/webhooks/paypal.js';
+import { purchaseRequestsToday } from './http/protection.js';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -33,6 +34,8 @@ export interface Composition {
   mandates?: MandateService;
   purchases?: PurchaseService;
   paypalWebhooks?: PaypalWebhookHandler;
+  /** Today's LLM-consuming requests, for the daily cap (#62). Set whenever purchases are. */
+  countLlmRequestsToday?: () => Promise<number>;
   disabled: Disabled[];
 }
 
@@ -103,6 +106,9 @@ export function compose(options: ComposeOptions): Composition {
     payments: paypal.gateway,
     ...(approvalNotifier ? { approvalNotifier } : {}),
   });
-  if (!paypal.webhooksEnabled) return { ...mandates, purchases, disabled: [...disabled, { feature: 'paypal-webhooks', missing: ['PAYPAL_WEBHOOK_ID'] }] };
-  return { ...mandates, purchases, paypalWebhooks: new PaypalWebhookHandler({ db, payments: paypal.gateway, purchases }), disabled };
+  const countLlmRequestsToday = () => purchaseRequestsToday(db, new Date());
+  if (!paypal.webhooksEnabled) {
+    return { ...mandates, purchases, countLlmRequestsToday, disabled: [...disabled, { feature: 'paypal-webhooks', missing: ['PAYPAL_WEBHOOK_ID'] }] };
+  }
+  return { ...mandates, purchases, countLlmRequestsToday, paypalWebhooks: new PaypalWebhookHandler({ db, payments: paypal.gateway, purchases }), disabled };
 }

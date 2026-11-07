@@ -26,12 +26,19 @@ let services: ReturnType<typeof compose> = { disabled: [] };
 const app = await buildApp({
   config,
   readinessChecks,
+  protection: {
+    purchasesEnabled: config.purchasesEnabled,
+    trustedProxies: config.trustedProxies,
+    dailyLlmCap: config.llmDailyRequestCap,
+    maxConcurrentLlm: config.llmMaxConcurrent,
+  },
   compose: (log) => {
     services = compose({ env: process.env, ...(db ? { db } : {}), log });
     return services;
   },
 });
 for (const { feature, missing } of services.disabled) app.log.warn({ feature, missing }, 'feature disabled: configuration missing');
+if (!config.purchasesEnabled) app.log.warn({ feature: 'purchases' }, 'feature disabled: PURCHASES_ENABLED=false');
 const jobs = services.purchases ? startJobs(services.purchases, { log: app.log }) : undefined;
 
 let closing = false;

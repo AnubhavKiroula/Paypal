@@ -7,6 +7,7 @@ import { loadMigrations, migrate } from '../src/db/migrate.js';
 import { DEMO_IDS, seed } from '../src/db/seed.js';
 import {
   bucketsFor,
+  clientKey,
   FixedWindowLimiter,
   LlmGate,
   purchaseRequestsToday,
@@ -110,6 +111,38 @@ describe('FixedWindowLimiter (fake clock)', () => {
     expect(limiter.take('ip-1').allowed).toBe(true);
     limiter.take('another');
     expect(limiter.take('ip-1').allowed).toBe(false);
+  });
+});
+
+describe('clientKey (finding 7)', () => {
+  it.each([
+    ['192.0.2.1', '192.0.2.1'],
+    ['::ffff:192.0.2.1', '192.0.2.1'],
+    ['::FFFF:192.0.2.1', '192.0.2.1'],
+    ['2001:db8:1:2:3:4:5:6', '2001:db8:1:2::/64'],
+    ['2001:0db8:0001:0002:ffff::1', '2001:db8:1:2::/64'],
+    ['2001:db8::1', '2001:db8:0:0::/64'],
+    ['::1', '0:0:0:0::/64'],
+    ['fe80::1%eth0', 'fe80:0:0:0::/64'],
+  ])('%s -> %s', (ip, key) => {
+    expect(clientKey(ip)).toBe(key);
+  });
+
+  it('keeps clients in different /64 networks apart', () => {
+    expect(clientKey('2001:db8:1:2::1')).not.toBe(clientKey('2001:db8:1:3::1'));
+  });
+
+  it('shares one rate-limit budget across a /64 over HTTP', async () => {
+    const a = await app({ purchases: stubPurchases().service, protection: { limits: { approval: 1 } } });
+    expect((await post(a, '/approvals/preview', { token: 'x' }, {}, '2001:db8:1:2::1')).statusCode).toBe(400);
+    expect((await post(a, '/approvals/preview', { token: 'x' }, {}, '2001:db8:1:2::ffff')).statusCode).toBe(429);
+    expect((await post(a, '/approvals/preview', { token: 'x' }, {}, '2001:db8:1:3::1')).statusCode).toBe(400);
+  });
+
+  it('treats an IPv4-mapped IPv6 address as the IPv4 client over HTTP', async () => {
+    const a = await app({ purchases: stubPurchases().service, protection: { limits: { approval: 1 } } });
+    expect((await post(a, '/approvals/preview', { token: 'x' }, {}, '192.0.2.50')).statusCode).toBe(400);
+    expect((await post(a, '/approvals/preview', { token: 'x' }, {}, '::ffff:192.0.2.50')).statusCode).toBe(429);
   });
 });
 

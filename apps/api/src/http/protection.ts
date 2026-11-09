@@ -1,3 +1,4 @@
+import { isIPv4, isIPv6 } from 'node:net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Queryable } from '../db/db.js';
 import { toBigInt } from '../db/db.js';
@@ -26,6 +27,26 @@ export function bucketsFor(method: string, url: string | undefined): Bucket[] {
   if (method === 'POST' && url === '/mandates/:mandateId/purchases') return ['global', 'purchase'];
   if (url === '/approvals/preview' || url === '/approvals/decision') return ['global', 'approval'];
   return ['global'];
+}
+
+/**
+ * The identity a client's limits are keyed on. IPv4 stays as is, and an IPv4-mapped IPv6 address (::ffff:a.b.c.d)
+ * counts as that IPv4 client. IPv6 is keyed by its /64, because one end user usually gets a whole /64 and could
+ * otherwise rotate addresses for a fresh budget each time.
+ */
+export function clientKey(ip: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (mapped?.[1] && isIPv4(mapped[1])) return mapped[1];
+  const address = ip.split('%')[0] ?? ip;
+  if (!isIPv6(address)) return ip;
+  const [head = '', tail = ''] = address.toLowerCase().split('::');
+  const left = head === '' ? [] : head.split(':');
+  const right = address.includes('::') ? (tail === '' ? [] : tail.split(':')) : [];
+  const groups = address.includes('::') ? [...left, ...Array<string>(8 - left.length - right.length).fill('0'), ...right] : left;
+  return `${groups
+    .slice(0, 4)
+    .map((group) => Number.parseInt(group, 16).toString(16))
+    .join(':')}::/64`;
 }
 
 /**
@@ -200,7 +221,7 @@ export function installProtection(app: FastifyInstance, options: ProtectionOptio
 
   app.addHook('onRequest', async (request, reply) => {
     for (const bucket of bucketsFor(request.method, request.routeOptions.url)) {
-      const decision = limiters[bucket].take(request.ip);
+      const decision = limiters[bucket].take(clientKey(request.ip));
       if (!decision.allowed) {
         rejections.count(`rate_limited:${bucket}`);
         return refuse(request, reply, 'RATE_LIMITED', decision.retryAfterMs);

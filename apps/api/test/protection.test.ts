@@ -13,9 +13,11 @@ import {
   LlmGate,
   purchaseRequestsToday,
   RATE_LIMITS,
+  ROUTE_BUCKETS,
   Rejections,
 } from '../src/http/protection.js';
 import { PurchaseError, type PurchaseService } from '../src/modules/purchases/service.js';
+import type { MandateService } from '../src/modules/mandates/service.js';
 import type { PaypalWebhookHandler } from '../src/modules/webhooks/paypal.js';
 import { createTestDb } from './helpers/pglite.js';
 
@@ -170,6 +172,40 @@ describe('route buckets', () => {
     const limited = await capture();
     expect(limited.statusCode).toBe(429);
     expect(limited.json()).toMatchObject({ error: 'RATE_LIMITED' });
+  });
+
+  /** Every "METHOD /path" the app serves, rebuilt from Fastify's printed route tree (children print relative paths). */
+  function registeredRoutes(instance: FastifyInstance): string[] {
+    const routes: string[] = [];
+    const stack: string[] = [];
+    for (const line of instance.printRoutes({ commonPrefix: false }).split('\n')) {
+      const match = /^(.*?)(?:├|└)── (\S+)(?: \(([A-Z, ]+)\))?$/.exec(line);
+      if (!match) continue;
+      const depth = (match[1] ?? '').length / 4;
+      stack.length = depth;
+      const path = `${stack.join('')}${match[2] ?? ''}`;
+      stack.push(match[2] ?? '');
+      for (const method of (match[3] ?? '').split(', ').filter(Boolean)) routes.push(`${method} ${path}`);
+    }
+    return routes;
+  }
+
+  it('classifies every registered route explicitly, and every entry is a registered route (finding 9)', async () => {
+    const full = await app({
+      config: { logLevel: 'silent', webOrigins: ['https://web.example'] },
+      purchases: stubPurchases().service,
+      mandates: {} as unknown as MandateService,
+      paypalWebhooks: { handle: () => Promise.resolve({ status: 200 as const }) } as unknown as PaypalWebhookHandler,
+    });
+    await full.ready();
+    const served = registeredRoutes(full);
+    expect(served.length).toBeGreaterThan(10);
+    // A route with no entry would silently spend only the global budget: each one needs a bucket or [] (exempt).
+    const unclassified = served.filter((route) => !(route.replace(/^HEAD /, 'GET ') in ROUTE_BUCKETS));
+    expect(unclassified).toEqual([]);
+    // No stale entries: a renamed route cannot leave its old classification behind.
+    const stale = Object.keys(ROUTE_BUCKETS).filter((key) => !served.includes(key));
+    expect(stale).toEqual([]);
   });
 
   it('has a stricter approval limit than the global one, and a generous webhook limit', () => {

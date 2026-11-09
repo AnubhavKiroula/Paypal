@@ -19,17 +19,36 @@ const DAY_MS = 86_400_000;
 const BUSY_RETRY_MS = 30_000;
 
 /**
- * Which budgets a route spends. Health checks spend none (Render polls them). The PayPal webhook spends only its
- * own, generous budget, so a busy client can never block PayPal's deliveries. `url` is Fastify's route pattern.
+ * The budgets every route spends, keyed "METHOD /pattern" exactly as Fastify registers it. Every registered route
+ * must have an entry, and every entry a route (test/protection.test.ts enumerates the full app), so a new or renamed
+ * route cannot silently fall into the wrong bucket. An empty list is an explicit exemption: health checks (Render polls them). The PayPal webhook spends
+ * only its own, generous budget, so a busy client can never block PayPal's deliveries.
  */
-export function bucketsFor(method: string, url: string | undefined): Bucket[] {
-  if (url === '/health' || url === '/ready') return [];
-  if (url === '/webhooks/paypal') return ['webhook'];
-  if (method === 'POST' && url === '/mandates/:mandateId/purchases') return ['global', 'purchase'];
-  if (url === '/approvals/preview' || url === '/approvals/decision') return ['global', 'approval'];
+export const ROUTE_BUCKETS: Readonly<Record<string, readonly Bucket[]>> = {
+  'GET /health': [],
+  'GET /ready': [],
+  'POST /webhooks/paypal': ['webhook'],
+  'POST /mandates/:mandateId/purchases': ['global', 'purchase'],
+  'POST /approvals/preview': ['global', 'approval'],
+  'POST /approvals/decision': ['global', 'approval'],
   // Capture calls PayPal and writes an order event even when refused.
-  if (method === 'POST' && url === '/purchases/:purchaseId/capture') return ['global', 'capture'];
-  return ['global'];
+  'POST /purchases/:purchaseId/capture': ['global', 'capture'],
+  'GET /purchases/:purchaseId': ['global'],
+  'GET /purchases/:purchaseId/audit': ['global'],
+  'GET /mandates/:mandateId': ['global'],
+  'PATCH /mandates/:mandateId': ['global'],
+  'GET /mandates/:mandateId/summary': ['global'],
+  'GET /mandates/:mandateId/purchases': ['global'],
+  // CORS preflight (@fastify/cors).
+  'OPTIONS *': ['global'],
+};
+
+/** HEAD follows its GET route. */
+const routeKey = (method: string, url: string) => `${method === 'HEAD' ? 'GET' : method} ${url}`;
+
+/** Which budgets a request spends. A request that matched no route (404) spends the global one. */
+export function bucketsFor(method: string, url: string | undefined): readonly Bucket[] {
+  return url === undefined ? ['global'] : (ROUTE_BUCKETS[routeKey(method, url)] ?? ['global']);
 }
 
 /**

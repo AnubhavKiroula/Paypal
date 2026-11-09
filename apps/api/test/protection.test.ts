@@ -179,7 +179,7 @@ describe('route buckets', () => {
     const routes: string[] = [];
     const stack: string[] = [];
     for (const line of instance.printRoutes({ commonPrefix: false }).split('\n')) {
-      const match = /^(.*?)(?:├|└)── (\S+)(?: \(([A-Z, ]+)\))?$/.exec(line);
+      const match = /^(.*?)(?:\u251c|\u2514)\u2500\u2500 (\S+)(?: \(([A-Z, ]+)\))?$/.exec(line);
       if (!match) continue;
       const depth = (match[1] ?? '').length / 4;
       stack.length = depth;

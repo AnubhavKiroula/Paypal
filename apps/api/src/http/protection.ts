@@ -28,7 +28,12 @@ export function bucketsFor(method: string, url: string | undefined): Bucket[] {
   return ['global'];
 }
 
-/** Fixed-window counter per key. In memory: a restart resets it, which is fine for per-minute limits. */
+/**
+ * Fixed-window counter per key, in memory: a restart resets it, which is fine for per-minute limits. Memory is a hard
+ * cap of maxKeys entries. The Map keeps insertion order and a key is re-inserted whenever its window restarts, so the
+ * first key is always the oldest window: a new key past the cap evicts it in O(1), never by scanning the map. An
+ * evicted client simply starts a fresh window, so under a flood of distinct addresses the oldest lose their history.
+ */
 export class FixedWindowLimiter {
   readonly #limit: number;
   readonly #windowMs: number;
@@ -49,21 +54,20 @@ export class FixedWindowLimiter {
 
   take(key: string): { allowed: boolean; retryAfterMs: number } {
     const now = this.#now();
-    if (this.#windows.size >= this.#maxKeys) this.#prune(now);
     const window = this.#windows.get(key);
-    if (!window || now - window.start >= this.#windowMs) {
-      this.#windows.set(key, { start: now, count: 1 });
-      return { allowed: true, retryAfterMs: 0 };
-    }
-    if (window.count < this.#limit) {
+    if (window && now - window.start < this.#windowMs) {
+      if (window.count >= this.#limit) return { allowed: false, retryAfterMs: window.start + this.#windowMs - now };
       window.count += 1;
       return { allowed: true, retryAfterMs: 0 };
     }
-    return { allowed: false, retryAfterMs: window.start + this.#windowMs - now };
-  }
-
-  #prune(now: number): void {
-    for (const [key, window] of this.#windows) if (now - window.start >= this.#windowMs) this.#windows.delete(key);
+    // A new or restarted window goes to the end of the insertion order.
+    if (window) this.#windows.delete(key);
+    else if (this.#windows.size >= this.#maxKeys) {
+      const oldest = this.#windows.keys().next();
+      if (!oldest.done) this.#windows.delete(oldest.value);
+    }
+    this.#windows.set(key, { start: now, count: 1 });
+    return { allowed: true, retryAfterMs: 0 };
   }
 }
 

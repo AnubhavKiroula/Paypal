@@ -75,13 +75,41 @@ describe('FixedWindowLimiter (fake clock)', () => {
     expect(limiter.take('a').allowed).toBe(true);
   });
 
-  it('forgets expired windows so memory stays bounded', () => {
+  it('never holds more than maxKeys, even when every window is still live, evicting the oldest first (finding 5)', () => {
+    const now = 0; // a frozen clock: no window ever expires
+    const limiter = new FixedWindowLimiter({ limit: 1, windowMs: 60_000, now: () => now, maxKeys: 10 });
+    for (let i = 0; i < 1_000; i++) {
+      limiter.take(`ip-${i}`);
+      expect(limiter.size).toBeLessThanOrEqual(10);
+    }
+    // The newest keys are still limited; the oldest were evicted and start a fresh window.
+    expect(limiter.take('ip-999').allowed).toBe(false);
+    expect(limiter.take('ip-0').allowed).toBe(true);
+  });
+
+  it('keeps take() cheap when the map is full of live windows (no full-map scan per request)', () => {
+    const now = 0;
+    const maxKeys = 20_000;
+    const limiter = new FixedWindowLimiter({ limit: 5, windowMs: 60_000, now: () => now, maxKeys });
+    for (let i = 0; i < maxKeys; i++) limiter.take(`fill-${i}`);
+    const started = performance.now();
+    // A scan per insert would cost maxKeys^2 = 4e8 steps here; eviction costs one step each.
+    for (let i = 0; i < maxKeys; i++) limiter.take(`new-${i}`);
+    expect(performance.now() - started).toBeLessThan(1_500);
+    expect(limiter.size).toBe(maxKeys);
+  });
+
+  it('evicts expired windows lazily, oldest first, so memory stays at most maxKeys', () => {
     let now = 0;
     const limiter = new FixedWindowLimiter({ limit: 1, windowMs: 1_000, now: () => now, maxKeys: 10 });
     for (let i = 0; i < 10; i++) limiter.take(`ip-${i}`);
     now += 1_000;
-    limiter.take('fresh');
-    expect(limiter.size).toBe(1);
+    expect(limiter.take('fresh').allowed).toBe(true);
+    expect(limiter.size).toBe(10);
+    // An expired window restarts and moves to the back, so it is not the next one evicted.
+    expect(limiter.take('ip-1').allowed).toBe(true);
+    limiter.take('another');
+    expect(limiter.take('ip-1').allowed).toBe(false);
   });
 });
 

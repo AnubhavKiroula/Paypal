@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEMO_IDS } from '../src/db/seed.js';
+import { FIXTURE_PRODUCTS } from '../src/modules/catalog/fixture.js';
 import { formatChecks, runSmoke, type FetchLike } from '../src/smoke/deployed.js';
 
 const API = 'https://api.example.test';
@@ -53,6 +54,18 @@ describe('runSmoke', () => {
     const body = JSON.parse(post?.init?.body as string) as Record<string, string>;
     expect(body).toMatchObject({ requesterUserId: DEMO_IDS.requester });
     expect(body['requestKey']).toMatch(/^smoke-[0-9a-f-]{36}$/);
+  });
+
+  it('asks for an office-supplies item the deployed fixture catalog sells, so the request can reach PayPal', async () => {
+    const { fetch, calls } = fakeApi();
+    await runSmoke({ apiUrl: API, purchase: true, fetch });
+    const post = calls.find((c) => c.init?.method === 'POST');
+    const text = (JSON.parse(post?.init?.body as string) as Record<string, string>)['text']?.toLowerCase() ?? '';
+    // The product name before the comma ("Whiteboard markers" of "Whiteboard markers, 12 colours") must be in the text.
+    const named = FIXTURE_PRODUCTS.filter(
+      (p) => String(p.category).toLowerCase() === 'office supplies' && text.includes(String(p.title).split(',')[0]?.toLowerCase() ?? '\0'),
+    );
+    expect(named.map((p) => p.title)).not.toEqual([]);
   });
 
   it('names the likely cause when the demo data is missing, CORS is wrong or purchases are disabled', async () => {

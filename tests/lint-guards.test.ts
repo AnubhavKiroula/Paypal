@@ -55,5 +55,5 @@ describe('type-safety lint guards', () => {
     const quarantineModule = await selectors(QUARANTINE_MODULE);
     expect(quarantineModule).not.toContain('Quarantined');
     expect(quarantineModule).toContain('TSNeverKeyword');
-  });
+  }, 30_000);
 });

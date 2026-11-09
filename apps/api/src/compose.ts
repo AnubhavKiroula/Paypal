@@ -7,6 +7,7 @@ import { MandateService } from './modules/mandates/service.js';
 import { paypalGatewayFromEnv } from './modules/payments/gateway.js';
 import { PurchaseService } from './modules/purchases/service.js';
 import { PaypalWebhookHandler } from './modules/webhooks/paypal.js';
+import { purchaseRequestsToday } from './http/protection.js';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -20,6 +21,8 @@ export interface ComposeOptions {
   paypalFetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** Tests inject a fake fetch for the Zapier webhook. */
   zapierFetch?: (url: string, init: RequestInit) => Promise<Response>;
+  /** PURCHASES_ENABLED (#62). Default true. Off: the purchase service refuses every money-moving and LLM path. */
+  purchasesEnabled?: boolean;
 }
 
 /** A feature that is off, and the variable names (never values) that would turn it on. */
@@ -33,6 +36,8 @@ export interface Composition {
   mandates?: MandateService;
   purchases?: PurchaseService;
   paypalWebhooks?: PaypalWebhookHandler;
+  /** Today's LLM-consuming requests, for the daily cap (#62). Set whenever purchases are. */
+  countLlmRequestsToday?: () => Promise<number>;
   disabled: Disabled[];
 }
 
@@ -102,7 +107,11 @@ export function compose(options: ComposeOptions): Composition {
     ranker: new LlmRanker(client),
     payments: paypal.gateway,
     ...(approvalNotifier ? { approvalNotifier } : {}),
+    ...(options.purchasesEnabled === undefined ? {} : { paymentsEnabled: options.purchasesEnabled }),
   });
-  if (!paypal.webhooksEnabled) return { ...mandates, purchases, disabled: [...disabled, { feature: 'paypal-webhooks', missing: ['PAYPAL_WEBHOOK_ID'] }] };
-  return { ...mandates, purchases, paypalWebhooks: new PaypalWebhookHandler({ db, payments: paypal.gateway, purchases }), disabled };
+  const countLlmRequestsToday = () => purchaseRequestsToday(db, new Date());
+  if (!paypal.webhooksEnabled) {
+    return { ...mandates, purchases, countLlmRequestsToday, disabled: [...disabled, { feature: 'paypal-webhooks', missing: ['PAYPAL_WEBHOOK_ID'] }] };
+  }
+  return { ...mandates, purchases, countLlmRequestsToday, paypalWebhooks: new PaypalWebhookHandler({ db, payments: paypal.gateway, purchases }), disabled };
 }

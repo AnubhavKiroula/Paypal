@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { parseRequest } from '../../http/errors.js';
+import { clientKey, type PurchaseGuard, refuse } from '../../http/protection.js';
 import { PurchaseError, type PurchaseErrorCode, type PurchaseService } from './service.js';
 
 const SubmitBodySchema = z.strictObject({
@@ -24,6 +25,7 @@ const STATUS: Record<PurchaseErrorCode, number> = {
   APPROVAL_NOT_FOUND: 404,
   APPROVAL_ALREADY_DECIDED: 409,
   APPROVAL_EXPIRED: 410,
+  PURCHASES_DISABLED: 503,
 };
 
 // The token travels in the body, never in a URL, so it does not end up in access logs or browser history.
@@ -40,16 +42,40 @@ function sendPurchaseError(error: unknown, request: FastifyRequest, reply: Fasti
   return reply.status(STATUS[error.code]).send({ error: error.code, message: 'Request rejected', requestId: request.id });
 }
 
-export function purchaseRoutes(service: PurchaseService) {
+export function purchaseRoutes(service: PurchaseService, guard: PurchaseGuard) {
+  /** The kill switch (PURCHASES_ENABLED=false) for every route that calls the LLM or moves money. */
+  const switchedOff = (request: FastifyRequest, reply: FastifyReply): FastifyReply | undefined => {
+    if (guard.purchasesEnabled) return undefined;
+    guard.rejections.count('purchases_disabled');
+    return refuse(request, reply, 'PURCHASES_DISABLED');
+  };
+
   return (app: FastifyInstance): void => {
     app.post('/mandates/:mandateId/purchases', async (request, reply) => {
       const { mandateId } = parseRequest(MandateParamsSchema, request.params);
       const body = parseRequest(SubmitBodySchema, request.body);
+      // A replay is a database read: answer it before the kill switch and the LLM gate, which only new requests need.
+      try {
+        const stored = await service.replay({ mandateId, ...body });
+        if (stored) return await reply.status(200).send(stored);
+      } catch (error) {
+        return sendPurchaseError(error, request, reply);
+      }
+      const off = switchedOff(request, reply);
+      if (off) return off;
+      // Intent parsing and ranking call the LLM: admit only within the concurrency limit and the daily cap.
+      const entered = await guard.gate.enter(clientKey(request.ip));
+      if (!entered.ok) {
+        guard.rejections.count(entered.code.toLowerCase());
+        return refuse(request, reply, entered.code, entered.retryAfterMs);
+      }
       try {
         const { view, created } = await service.submit({ mandateId, ...body });
         return await reply.status(created ? 201 : 200).send(view);
       } catch (error) {
         return sendPurchaseError(error, request, reply);
+      } finally {
+        entered.release();
       }
     });
 
@@ -73,6 +99,11 @@ export function purchaseRoutes(service: PurchaseService) {
 
     app.post('/approvals/decision', async (request, reply) => {
       const body = parseRequest(ApprovalDecisionSchema, request.body);
+      // Only APPROVE pays for the order. REJECT stays available with the switch off, so the budget hold is released.
+      if (body.decision === 'APPROVE') {
+        const off = switchedOff(request, reply);
+        if (off) return off;
+      }
       try {
         return await reply.send(await service.decideApproval(body.token, body.decision, body.channel));
       } catch (error) {
@@ -81,6 +112,8 @@ export function purchaseRoutes(service: PurchaseService) {
     });
 
     app.post('/purchases/:purchaseId/capture', async (request, reply) => {
+      const off = switchedOff(request, reply);
+      if (off) return off;
       const { purchaseId } = parseRequest(PurchaseParamsSchema, request.params);
       try {
         return await reply.send(await service.capture(purchaseId));

@@ -71,6 +71,13 @@ describe('compose', () => {
     ]);
   });
 
+  it('passes the kill switch to the purchase service, which then refuses new purchases (#62)', async () => {
+    const result = compose({ env: ENV, db, log, llmAdapter: new ScriptedModel({ description: 'x', quantity: 1 }), purchasesEnabled: false });
+    await expect(
+      result.purchases?.submit({ mandateId: DEMO_IDS.mandate, requesterUserId: DEMO_IDS.requester, text: 'pens', requestKey: 'compose-ks-0001' }),
+    ).rejects.toMatchObject({ code: 'PURCHASES_DISABLED' });
+  });
+
   it('names a half-configured or invalid Zap by variable only', () => {
     const half = compose({ env: { ...ENV, WEB_APP_URL: 'https://web.example' }, db, log });
     expect(half.disabled[0]).toEqual({ feature: 'approval-notifications', missing: ['ZAPIER_APPROVAL_WEBHOOK_URL'] });

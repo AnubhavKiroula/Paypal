@@ -12,7 +12,7 @@ The API, the web app and Postgres are described as code in [`render.yaml`](../re
 | Web app (`mandate-web`) | `<web-url>` | Free (static) |
 | Postgres (`mandate-db`) | private to the Render workspace (no external connections) | Free, created 2026-11-07 |
 
-The live URLs are deliberately not published here. The API has no login or rate limit yet, so a public URL invites abuse of the LLM quota (see Known limits). Get them from the Render dashboard or a teammate.
+The live URLs are deliberately not published here. The API has no login, so a public URL invites abuse of the LLM quota; the limits in [Abuse protection](#abuse-protection) cap the damage (see Known limits). Get them from the Render dashboard or a teammate.
 
 Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service name is already taken on `onrender.com`. **Never guess a URL**: the unsuffixed names belong to other people's services. Copy each URL from its service page.
 
@@ -25,7 +25,10 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
    |---|---|---|---|
    | `DATABASE_URL` | mandate-api | Set by Render from `mandate-db` | Everything |
    | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | mandate-api | Sandbox app credentials (developer.paypal.com → Apps & Credentials → **Sandbox**) | Purchases |
-   | LLM key (`ANTHROPIC_API_KEY` today) | mandate-api | The team's LLM key | Purchases |
+   | `LLM_API_KEY` | mandate-api | NVIDIA API key from build.nvidia.com. The other `LLM_*` values are set in `render.yaml` ([llm-layer.md](llm-layer.md) section 9). Set the key only once abuse protection is deployed | Purchases |
+   | `PURCHASES_ENABLED` | mandate-api | Unset or `true`; `false` is the kill switch (see below) | Optional |
+   | `TRUST_PROXY`, `LLM_DAILY_REQUEST_CAP`, `LLM_DAILY_PER_IP_CAP`, `LLM_MAX_CONCURRENT` | mandate-api | Set in `render.yaml`; see [Abuse protection](#abuse-protection) | Client IP, LLM limits |
+   | `DEBUG_PROXY_HOPS` | mandate-api | Unset (off). `true` only while verifying `TRUST_PROXY` (see Abuse protection) | Optional |
    | `WEB_ORIGIN` | mandate-api | The web app URL, no trailing slash | The browser calling the API (CORS) |
    | `WEB_APP_URL` | mandate-api | The web app URL | Review links in approval messages |
    | `ZAPIER_APPROVAL_WEBHOOK_URL` | mandate-api | Zapier Catch Hook ([zapier.md](zapier.md)) | Approval messages (optional) |
@@ -45,6 +48,55 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
    It prints one PASS/FAIL line per check (health, Postgres, demo mandate, dashboard summary, CORS, and with `--purchase`, a purchase decision) and exits non-zero on any failure. It prints status codes only, never bodies or configuration. `--purchase` is opt-in because an `ALLOW` holds demo budget and opens a sandbox PayPal order.
 
 At boot the API logs `feature disabled: configuration missing` with the **names** of missing variables, never their values, and still serves `/health` and `/ready`. Purchases are registered only when the database, PayPal and LLM settings are all present.
+
+## Abuse protection
+
+The API has no login, so these limits bound what an anonymous client can spend (#62). All rejections use the usual error body (`{ error, message, requestId }`), and `429`/`503` answers carry `Retry-After` when a wait is known. Each rejection is counted by reason and logged as `request rejected` with the reason and running count only: never bodies, headers or IPs.
+
+| Control | Limit | Answer |
+|---|---|---|
+| Per-IP rate limit, all routes | 120 requests/minute | `429 RATE_LIMITED` |
+| `POST /mandates/:id/purchases` (calls the LLM) | 5/minute per IP, on top of the above | `429 RATE_LIMITED` |
+| `/approvals/preview`, `/approvals/decision` | 10/minute per IP, to slow token guessing | `429 RATE_LIMITED` |
+| `POST /purchases/:id/capture` | 10/minute per IP: it calls PayPal and writes an order event even when refused | `429 RATE_LIMITED` |
+| `POST /webhooks/paypal` | 600/minute per IP, its own budget: a busy client cannot block PayPal | `429 RATE_LIMITED` |
+| `/health`, `/ready` | never limited (Render polls them) | |
+| LLM requests in flight | `LLM_MAX_CONCURRENT` (default 2) | `503 LLM_BUSY` |
+| LLM requests per UTC day | `LLM_DAILY_REQUEST_CAP` (default 100) | `429 LLM_DAILY_CAP`, `Retry-After` until midnight UTC |
+| LLM requests per client per UTC day | `LLM_DAILY_PER_IP_CAP` (default 20), so one client cannot use up the day | `429 LLM_DAILY_CLIENT_CAP`, `Retry-After` until midnight UTC |
+| Request body | 64 KiB | `413 PAYLOAD_TOO_LARGE` |
+| Kill switch | `PURCHASES_ENABLED=false` | `503 PURCHASES_DISABLED` on new purchases, capture and `APPROVE` decisions. See below for exactly what it stops |
+
+- **The daily cap is counted in Postgres**, as the number of `purchase_request` rows created since midnight UTC: each one is what triggers the LLM calls (intent, then ranking). It survives restarts and the free plan's spin-down, and needs no extra table. A concurrency slot is taken before the count is read, so the cap can be overshot by at most `LLM_MAX_CONCURRENT - 1`. If the count cannot be read, LLM requests are refused (`503 LLM_CAP_UNAVAILABLE`).
+- **Per-IP limits are in memory**, per instance; a restart resets them, which is acceptable for per-minute windows. A client is an IPv4 address or an IPv6 /64 (`::ffff:a.b.c.d` counts as the IPv4 client). Memory is capped at 50,000 clients per limit, evicting the oldest first; an evicted client just starts a fresh window.
+- **The per-client daily quota is in memory too**, so a restart or the free plan's spin-down resets it; the Postgres-backed global cap still holds. It stores salted SHA-256 hashes of the client key (random salt per process), never raw IPs. It is spent before the global count is read and given back if the global cap refuses.
+- **Client IP behind Render's proxy.** `TRUST_PROXY` lists the proxy addresses or CIDRs whose `X-Forwarded-For` entries are trusted. Fastify walks the header from the right and stops at the first untrusted address, so a forged left-most entry is ignored. It is never `true` (which would trust the forgeable left-most entry), and not a hop count (Fastify 5.12 ignores numeric `trustProxy` by design). If the setting is too narrow, all clients share the proxy's address and are limited together: safe, but strict.
+- **Kill switch:** set `PURCHASES_ENABLED=false` on mandate-api and redeploy. The boot log says `feature disabled: PURCHASES_ENABLED=false`. It is enforced at one choke point in `PurchaseService`: every PayPal call that creates or captures an order goes through it, so no route, webhook or job can move money while it is off. The routes also answer early with `503`.
+
+  | Stops (no PayPal order is created or captured, no LLM call) | Keeps working |
+  |---|---|
+  | New purchase requests (`POST /mandates/:id/purchases`), including their LLM calls | Reads: purchases, mandates, dashboard, audit trail, approval previews |
+  | `POST /purchases/:id/capture` | `/health`, `/ready` |
+  | `APPROVE` decisions (the approval stays pending) | `REJECT` decisions, which release the budget hold |
+  | Captures a verified webhook or the reconcile job would start: the order is marked `capture_deferred_at` and an order event `capture_deferred` is recorded | Webhook signature verification and event recording; the webhook answers `200`, so PayPal does not retry |
+  | Retrying an order creation whose outcome was unknown | The expiry sweep, and reading PayPal orders (`getOrder`) to reconcile |
+  | | Idempotent replays of an existing request, answered from the database |
+
+  When the switch is back on, the 60 s reconcile job picks up every deferred order: it captures it if PayPal still reports the order `APPROVED` and accepts the capture. If PayPal refuses (for example, the buyer's approval has expired), the order becomes `FAILED` with `CAPTURE_REFUSED_AFTER_DEFERRAL` and its budget hold is released. A `VOIDED` order fails as before.
+
+`VERIFY` on the deployed API, once, with the `DEBUG_PROXY_HOPS` diagnostic. It logs one `proxy diagnostic` line per request with `xffHops` (how many `X-Forwarded-For` entries arrived), `pickedHop` (which one became the client IP: `0` is the socket peer, meaning the proxy itself was not trusted; `1` is the right-most forwarded entry) and `clientHash` (a salted hash of the client, stable within one process). It never logs a raw IP.
+
+1. mandate-api → **Environment** → add `DEBUG_PROXY_HOPS` = `true` → **Save, rebuild, and deploy**. Wait for **Live**.
+2. From network A (for example home Wi-Fi), run three times: `curl -s -o /dev/null -w "%{http_code}\n" https://<api-url>/health`
+3. From network B (for example a phone hotspot), run the same command three times.
+4. Spoofing check, from network A: `for i in $(seq 1 11); do curl -s -o /dev/null -w "%{http_code} " -X POST -H "content-type: application/json" -H "X-Forwarded-For: 203.0.113.$i" -d '{"token":"x"}' https://<api-url>/approvals/preview; done; echo`. The first ten should be `400` and the 11th `429`.
+5. mandate-api → **Logs**, search `proxy diagnostic`. Expected:
+   - `pickedHop` is the same small number (`1` if Render adds one hop) on every line, and `xffHops` is `pickedHop` or more.
+   - Network A's three lines share one `clientHash`, network B's share a **different** one.
+   - Step 4's eleven lines all show network A's hash, despite the eleven different spoofed values.
+6. mandate-api → **Environment** → delete `DEBUG_PROXY_HOPS` (or set `false`) → redeploy.
+
+Reading the result: if `pickedHop` is `0`, the proxy's address is outside `TRUST_PROXY`, so all clients share one bucket (safe but strict); if the hash changes on every line from one network, a rotating CDN edge is being picked, so unrelated users share buckets and an attacker could get fresh ones. In either case, report `xffHops` and `pickedHop` and widen or narrow `TRUST_PROXY` before relying on the per-IP limits.
 
 ## PayPal webhook
 
@@ -69,7 +121,8 @@ Service → **Events** → pick the last good deploy → **Rollback**. Migration
 | Symptom | Cause | Fix |
 |---|---|---|
 | A URL answers with someone else's app (e.g. `x-render-origin-server: uvicorn`) | The name was taken; Render added a suffix to ours | Use the URL from the service page |
-| Smoke: `demo mandate HTTP 404 MANDATE_NOT_FOUND` | Demo data not seeded | Redeploy with the current `render.yaml` start command |
+| Smoke: `demo mandate HTTP 404 MANDATE_NOT_FOUND` | Demo data not seeded: the service still has an old start command | `render.yaml` changes reach a service only on a **Blueprint sync**, not on a redeploy. Blueprint page → **Manual sync**, then check the service's Start Command |
+| `429 RATE_LIMITED`, `503 LLM_BUSY` or `429 LLM_DAILY_CAP` | A limit in [Abuse protection](#abuse-protection) | Wait for `Retry-After`; raise the variable only if the quota allows |
 | Smoke: `origin not allowed (set WEB_ORIGIN)`; browser console shows CORS errors | `WEB_ORIGIN` on mandate-api is not exactly the web URL | Set it (scheme + host, no trailing slash) and redeploy mandate-api |
 | The web app calls `127.0.0.1:3000` or its own URL | `VITE_API_URL` unset or wrong at **build** time | Fix it on mandate-web, then rebuild |
 | Smoke: `purchases disabled` | A purchase variable is missing | The API boot log names it |
@@ -84,5 +137,5 @@ From Render's free-plan docs (render.com/docs/free, read 2026-11-07; check befor
 | **Free Postgres expires 30 days after creation**, then is inaccessible for a 14-day grace period, then deleted. No backups | Ours was created 2026-11-07, so it stops working about **2026-12-07**, before judging ends. Upgrade `mandate-db` to a paid plan before then (price: check render.com/pricing) |
 | **Free web services sleep** after 15 minutes without traffic and take about a minute to wake | Judges may see a slow first load. Consider a paid instance for judging |
 | One free Postgres per workspace; 750 free instance hours per month | Don't create a second free database in the same workspace |
-| **No authentication yet** (#10 follow-up) | The API is public, and the demo user ids are in the repo, so anyone with the URL can edit the demo mandate or submit sandbox purchases. Sandbox only: no real money moves |
+| **No authentication yet** (#10 follow-up) | The API is public, and the demo user ids are in the repo, so anyone with the URL can edit the demo mandate or submit sandbox purchases. Sandbox only: no real money moves. The [abuse protection](#abuse-protection) limits bound the LLM quota and the request rate, but do not stop someone editing the demo mandate |
 | Region `singapore` | Close to the team. Judges are mostly US-based; latency is acceptable for a demo |

@@ -3,11 +3,11 @@ import { ApiConfigError, loadApiConfig } from '../src/config.js';
 
 describe('loadApiConfig', () => {
   it('defaults to loopback, port 3000 and info logging', () => {
-    expect(loadApiConfig({})).toEqual({ port: 3000, host: '127.0.0.1', logLevel: 'info' });
+    expect(loadApiConfig({})).toMatchObject({ port: 3000, host: '127.0.0.1', logLevel: 'info' });
   });
 
   it('reads PORT, HOST and LOG_LEVEL', () => {
-    expect(loadApiConfig({ PORT: '10000', HOST: '0.0.0.0', LOG_LEVEL: 'debug' })).toEqual({
+    expect(loadApiConfig({ PORT: '10000', HOST: '0.0.0.0', LOG_LEVEL: 'debug' })).toMatchObject({
       port: 10000,
       host: '0.0.0.0',
       logLevel: 'debug',

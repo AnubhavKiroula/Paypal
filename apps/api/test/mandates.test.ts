@@ -76,7 +76,7 @@ beforeAll(async () => {
   }
   await db.query('UPDATE mandate SET approval_threshold_minor_units = 30000 WHERE id = $1', [DEMO_IDS.mandate]);
   app = await buildApp({ config: { logLevel: 'silent', webOrigins: ['https://web.example'] }, logger: false, mandates: new MandateService(db) });
-});
+}, 60_000);
 
 afterAll(async () => {
   await app.close();

@@ -26,7 +26,7 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
    | `DATABASE_URL` | mandate-api | Set by Render from `mandate-db` | Everything |
    | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | mandate-api | Sandbox app credentials (developer.paypal.com → Apps & Credentials → **Sandbox**) | Purchases |
    | `LLM_API_KEY` | mandate-api | NVIDIA API key from build.nvidia.com. The other `LLM_*` values are set in `render.yaml` ([llm-layer.md](llm-layer.md) section 9). Set the key only once abuse protection is deployed | Purchases |
-   | `LLM_TIMEOUT_MS` | mandate-api | Default `120000`. Ours is `240000`: one NVIDIA call ran past 120 s and the request ended `INTENT_FAILED` (see [Gate 1 evidence](#gate-1-evidence-2026-11-10)) | Optional |
+   | `LLM_TIMEOUT_MS` | mandate-api | Default `120000`. Ours is `240000`: one NVIDIA call ran past 120 s and the request ended `INTENT_FAILED` (see [Gate 1 evidence](#gate-1-evidence)) | Optional |
    | `PURCHASES_ENABLED` | mandate-api | Unset or `true`; `false` is the kill switch (see below) | Optional |
    | `TRUST_PROXY`, `LLM_DAILY_REQUEST_CAP`, `LLM_DAILY_PER_IP_CAP`, `LLM_MAX_CONCURRENT` | mandate-api | Set in `render.yaml`; see [Abuse protection](#abuse-protection) | Client IP, LLM limits |
    | `DEBUG_PROXY_HOPS` | mandate-api | Unset (off). `true` only while verifying `TRUST_PROXY` (see Abuse protection) | Optional |
@@ -48,9 +48,9 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
 
    It prints one PASS/FAIL line per check (health, Postgres, demo mandate, dashboard summary, CORS, and with `--purchase`, a purchase decision) and exits non-zero on any failure. It prints status codes only, never bodies or configuration. `--purchase` is opt-in because an `ALLOW` holds demo budget and opens a sandbox PayPal order. It asks for whiteboard markers: the deployed API searches only the offline fixture catalog ([`fixture.ts`](../apps/api/src/modules/catalog/fixture.ts)), so a request must name one of its items or it ends `NO_MATCH`.
 
-## Gate 1 evidence (2026-11-10)
+## Gate 1 evidence
 
-One sandbox purchase created and captured by the deployed API (`main` at `769935d`, Render free plan). The calls were plain HTTP requests from a laptop; the buyer approved on PayPal's sandbox checkout page. Sandbox only: no real money moved.
+One sandbox purchase created and captured by the deployed API on 2026-11-09, 20:22–20:31 UTC (`main` at `769935d`, Render free plan). The calls were plain HTTP requests from a laptop; the buyer approved on PayPal's sandbox checkout page. Sandbox only: no real money moved.
 
 | Step | Result |
 |---|---|
@@ -65,7 +65,7 @@ One sandbox purchase created and captured by the deployed API (`main` at `769935
 | PayPal order | `0T9321544D519493Y` |
 | PayPal capture | `9KR605721A308010M` |
 
-**Approval path, same day:** "Two conference speakerphones and three HD webcams for the club room" returned `NEEDS_APPROVAL` (`THRESHOLD_EXCEEDED`, 355.00 USD) in 143 s, and the audit trail records `approval.notified` 0.4 s later (purchase `18f28e55-8844-4427-8584-7c47ce7d1d5b`). That shows the API called the Zapier Catch Hook; what the Zap does next is in [zapier.md](zapier.md).
+**Approval path (20:32–20:34 UTC):** "Two conference speakerphones and three HD webcams for the club room" returned `NEEDS_APPROVAL` (`THRESHOLD_EXCEEDED`, 355.00 USD) in 143 s, and the audit trail records `approval.notified` 0.4 s later (purchase `18f28e55-8844-4427-8584-7c47ce7d1d5b`). That shows the API called the Zapier Catch Hook; what the Zap does next is in [zapier.md](zapier.md).
 
 **What failed first:** "printer paper" ended `NO_MATCH` (not in the fixture catalog). One request ended `INTENT_FAILED` when the LLM call ran past the 120 s default timeout. One `ALLOW` ended `PAYPAL_AUTH` because the PayPal credentials on Render had been pasted wrong. Requests took 55–143 s end to end on the NVIDIA free endpoint.
 

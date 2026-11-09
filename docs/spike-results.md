@@ -26,6 +26,8 @@ All IDs are PayPal sandbox identifiers. They are not secrets. No call returned a
 
 Step 3 is the first real sandbox payment made by our own code. It ran from a laptop, not from the deployed service. The Gate 1 deployed transaction is #14.
 
+**Through the deployed API (Gate 1, #14).** On 2026-11-09 the deployed service on Render created order `0T9321544D519493Y` (20:23:51 UTC) after a policy `ALLOW` for 23.00 USD. The sandbox buyer approved it, and the API captured it (20:31:19 UTC): order `COMPLETED`, capture `9KR605721A308010M` `COMPLETED`, 23.00 USD. Steps and timings: [deploy.md](deploy.md#gate-1-evidence).
+
 ## Field names (confirmed against the API)
 
 Request fields came from PayPal's docs ("Save PayPal with the Orders API" and "Save PayPal with the Payment Method Tokens API", developer.paypal.com, read 2026-11-05). The live responses above confirmed them.

@@ -179,6 +179,20 @@ export class ClientDailyQuota {
   }
 }
 
+export interface GateLog {
+  error(fields: Record<string, unknown>, message: string): void;
+}
+
+/** IPv4 and IPv6 literals, so a database error message never carries an address into the logs. */
+const ADDRESS = /\b(?:\d{1,3}\.){3}\d{1,3}\b|(?:[0-9a-f]{1,4})?(?::[0-9a-f]{0,4}){2,7}(?:%[\w.]+)?/gi;
+
+/** The message (addresses redacted, at most 200 characters) and code of a failed query: never rows, SQL or parameters. */
+export function safeDbError(error: unknown): { message: string; code?: string } {
+  const message = (error instanceof Error ? error.message : 'unknown error').replace(ADDRESS, '[address]').slice(0, 200);
+  const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+  return code === undefined ? { message } : { message, code };
+}
+
 /**
  * Admits a request that will call the LLM. The concurrency slot is taken first, so concurrent requests cannot
  * all pass the daily count at once: the cap can be overshot by at most maxConcurrent - 1. The per-client quota is
@@ -191,6 +205,7 @@ export class LlmGate {
   readonly #countToday: (() => Promise<number>) | undefined;
   readonly #now: () => number;
   readonly #clientQuota: ClientDailyQuota | undefined;
+  readonly #log: GateLog | undefined;
   #inFlight = 0;
 
   constructor(options: {
@@ -199,12 +214,14 @@ export class LlmGate {
     countToday?: () => Promise<number>;
     now: () => number;
     clientQuota?: ClientDailyQuota;
+    log?: GateLog;
   }) {
     this.#maxConcurrent = options.maxConcurrent;
     this.#dailyCap = options.dailyCap;
     this.#countToday = options.countToday;
     this.#now = options.now;
     this.#clientQuota = options.clientQuota;
+    this.#log = options.log;
   }
 
   get inFlight(): number {
@@ -240,7 +257,8 @@ export class LlmGate {
     try {
       if (!this.#countToday) throw new Error('no counter');
       today = await this.#countToday();
-    } catch {
+    } catch (error) {
+      if (this.#countToday) this.#log?.error({ err: safeDbError(error) }, 'llm daily count failed');
       return refuse('LLM_CAP_UNAVAILABLE', BUSY_RETRY_MS);
     }
     if (today >= this.#dailyCap) return refuse('LLM_DAILY_CAP', untilMidnightUtc(this.#now()));
@@ -326,6 +344,7 @@ export function installProtection(app: FastifyInstance, options: ProtectionOptio
     gate: new LlmGate({
       maxConcurrent: options.maxConcurrentLlm ?? 2,
       clientQuota: new ClientDailyQuota({ perClientCap: options.dailyLlmPerClientCap ?? 20, now }),
+      log: app.log,
       dailyCap: options.dailyLlmCap ?? 100,
       now,
       ...(options.countLlmRequestsToday ? { countToday: options.countLlmRequestsToday } : {}),

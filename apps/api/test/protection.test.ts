@@ -462,6 +462,23 @@ describe('daily LLM cap, counted in Postgres', () => {
     expect(rejections.snapshot()).toEqual({ llm_daily_cap: 1 });
   });
 
+  it('logs a failed daily-count query (message and code only, addresses redacted) and still fails closed (finding 8)', async () => {
+    const errors: { fields: Record<string, unknown>; message: string }[] = [];
+    const failure = Object.assign(new Error('connect ECONNREFUSED 10.1.2.3:5432 via fe80::1ff:fe23:4567:890a'), { code: 'ECONNREFUSED', detail: 'row data' });
+    const gate = new LlmGate({
+      maxConcurrent: 1,
+      dailyCap: 10,
+      countToday: () => Promise.reject(failure),
+      now: () => 0,
+      log: { error: (fields, message) => void errors.push({ fields, message }) },
+    });
+    expect(await gate.enter()).toMatchObject({ ok: false, code: 'LLM_CAP_UNAVAILABLE' });
+    expect(errors).toEqual([
+      { fields: { err: { message: 'connect ECONNREFUSED [address]:5432 via [address]', code: 'ECONNREFUSED' } }, message: 'llm daily count failed' },
+    ]);
+    expect(gate.inFlight).toBe(0);
+  });
+
   it('fails closed: no counter configured means no LLM requests', async () => {
     const stub = stubPurchases();
     const a = await app({ purchases: stub.service });

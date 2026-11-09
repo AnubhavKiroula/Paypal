@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { isIPv4, isIPv6 } from 'node:net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Queryable } from '../db/db.js';
@@ -112,32 +113,104 @@ export class Rejections {
   }
 }
 
-export type GateRefusal = { ok: false; code: 'LLM_BUSY' | 'LLM_DAILY_CAP' | 'LLM_CAP_UNAVAILABLE'; retryAfterMs: number };
+export type GateRefusal = {
+  ok: false;
+  code: 'LLM_BUSY' | 'LLM_DAILY_CAP' | 'LLM_DAILY_CLIENT_CAP' | 'LLM_CAP_UNAVAILABLE';
+  retryAfterMs: number;
+};
+
+const untilMidnightUtc = (now: number) => DAY_MS - (now % DAY_MS);
+
+/**
+ * Per-client daily quota on LLM requests, below the global cap, so one client cannot use up the day for everyone.
+ * In memory, and so reset by a restart or the free plan's spin-down: the Postgres-backed global cap still holds then.
+ * Keys are salted SHA-256 hashes of clientKey(), never raw IPs; the salt is random per process. Bounded to maxKeys
+ * entries with O(1) oldest-first eviction, like FixedWindowLimiter.
+ */
+export class ClientDailyQuota {
+  readonly #perClientCap: number;
+  readonly #now: () => number;
+  readonly #maxKeys: number;
+  readonly #salt = randomBytes(16);
+  readonly #counts = new Map<string, { day: number; count: number }>();
+
+  constructor(options: { perClientCap: number; now: () => number; maxKeys?: number }) {
+    this.#perClientCap = options.perClientCap;
+    this.#now = options.now;
+    this.#maxKeys = options.maxKeys ?? 50_000;
+  }
+
+  /** Spends one request of today's quota, or refuses until midnight UTC. Synchronous, so concurrent calls cannot race. */
+  take(client: string): { allowed: boolean; retryAfterMs: number } {
+    const now = this.#now();
+    const day = Math.floor(now / DAY_MS);
+    const key = this.#hash(client);
+    const entry = this.#counts.get(key);
+    if (entry && entry.day === day) {
+      if (entry.count >= this.#perClientCap) return { allowed: false, retryAfterMs: untilMidnightUtc(now) };
+      entry.count += 1;
+      return { allowed: true, retryAfterMs: 0 };
+    }
+    if (entry) this.#counts.delete(key);
+    else if (this.#counts.size >= this.#maxKeys) {
+      const oldest = this.#counts.keys().next();
+      if (!oldest.done) this.#counts.delete(oldest.value);
+    }
+    if (this.#perClientCap < 1) return { allowed: false, retryAfterMs: untilMidnightUtc(now) };
+    this.#counts.set(key, { day, count: 1 });
+    return { allowed: true, retryAfterMs: 0 };
+  }
+
+  /** Gives back a request taken today, when a later check refused it. */
+  refund(client: string): void {
+    const entry = this.#counts.get(this.#hash(client));
+    if (entry && entry.day === Math.floor(this.#now() / DAY_MS) && entry.count > 0) entry.count -= 1;
+  }
+
+  /** The stored keys (hashes), for tests: proves no raw IP is kept. */
+  storedKeys(): string[] {
+    return [...this.#counts.keys()];
+  }
+
+  #hash(client: string): string {
+    return createHash('sha256').update(this.#salt).update(client).digest('hex').slice(0, 32);
+  }
+}
 
 /**
  * Admits a request that will call the LLM. The concurrency slot is taken first, so concurrent requests cannot
- * all pass the daily count at once: the cap can be overshot by at most maxConcurrent - 1. The count comes from
- * Postgres, so it survives restarts and the free plan's spin-down. If the count cannot be read, it fails closed.
+ * all pass the daily count at once: the cap can be overshot by at most maxConcurrent - 1. The per-client quota is
+ * spent next, synchronously, and refunded if the global cap then refuses. The global count comes from Postgres, so
+ * it survives restarts and the free plan's spin-down. If the count cannot be read, it fails closed.
  */
 export class LlmGate {
   readonly #maxConcurrent: number;
   readonly #dailyCap: number;
   readonly #countToday: (() => Promise<number>) | undefined;
   readonly #now: () => number;
+  readonly #clientQuota: ClientDailyQuota | undefined;
   #inFlight = 0;
 
-  constructor(options: { maxConcurrent: number; dailyCap: number; countToday?: () => Promise<number>; now: () => number }) {
+  constructor(options: {
+    maxConcurrent: number;
+    dailyCap: number;
+    countToday?: () => Promise<number>;
+    now: () => number;
+    clientQuota?: ClientDailyQuota;
+  }) {
     this.#maxConcurrent = options.maxConcurrent;
     this.#dailyCap = options.dailyCap;
     this.#countToday = options.countToday;
     this.#now = options.now;
+    this.#clientQuota = options.clientQuota;
   }
 
   get inFlight(): number {
     return this.#inFlight;
   }
 
-  async enter(): Promise<{ ok: true; release: () => void } | GateRefusal> {
+  /** `client` is clientKey(request.ip); without it (tests, jobs) only the global limits apply. */
+  async enter(client?: string): Promise<{ ok: true; release: () => void } | GateRefusal> {
     if (this.#inFlight >= this.#maxConcurrent) return { ok: false, code: 'LLM_BUSY', retryAfterMs: BUSY_RETRY_MS };
     this.#inFlight += 1;
     let released = false;
@@ -147,19 +220,28 @@ export class LlmGate {
       this.#inFlight -= 1;
     };
 
+    const quota = client === undefined ? undefined : this.#clientQuota;
+    if (quota && client !== undefined) {
+      const spent = quota.take(client);
+      if (!spent.allowed) {
+        release();
+        return { ok: false, code: 'LLM_DAILY_CLIENT_CAP', retryAfterMs: spent.retryAfterMs };
+      }
+    }
+    const refuse = (code: GateRefusal['code'], retryAfterMs: number): GateRefusal => {
+      if (quota && client !== undefined) quota.refund(client);
+      release();
+      return { ok: false, code, retryAfterMs };
+    };
+
     let today: number;
     try {
       if (!this.#countToday) throw new Error('no counter');
       today = await this.#countToday();
     } catch {
-      release();
-      return { ok: false, code: 'LLM_CAP_UNAVAILABLE', retryAfterMs: BUSY_RETRY_MS };
+      return refuse('LLM_CAP_UNAVAILABLE', BUSY_RETRY_MS);
     }
-    if (today >= this.#dailyCap) {
-      release();
-      const now = this.#now();
-      return { ok: false, code: 'LLM_DAILY_CAP', retryAfterMs: DAY_MS - (now % DAY_MS) };
-    }
+    if (today >= this.#dailyCap) return refuse('LLM_DAILY_CAP', untilMidnightUtc(this.#now()));
     return { ok: true, release };
   }
 }
@@ -174,6 +256,7 @@ export async function purchaseRequestsToday(db: Queryable, now: Date): Promise<n
 const STATUS: Record<'RATE_LIMITED' | 'PURCHASES_DISABLED' | GateRefusal['code'], number> = {
   RATE_LIMITED: 429,
   LLM_DAILY_CAP: 429,
+  LLM_DAILY_CLIENT_CAP: 429,
   LLM_BUSY: 503,
   LLM_CAP_UNAVAILABLE: 503,
   PURCHASES_DISABLED: 503,
@@ -191,6 +274,8 @@ export interface ProtectionOptions {
   /** Per-bucket overrides of RATE_LIMITS (tests use small ones). */
   limits?: Partial<Record<Bucket, number>>;
   maxConcurrentLlm?: number;
+  /** LLM_DAILY_PER_IP_CAP: LLM requests per client per UTC day (in memory, below the global cap). */
+  dailyLlmPerClientCap?: number;
   dailyLlmCap?: number;
   /** Today's LLM-consuming requests, from Postgres. Without it, LLM requests are refused (fail closed). */
   countLlmRequestsToday?: () => Promise<number>;
@@ -238,6 +323,7 @@ export function installProtection(app: FastifyInstance, options: ProtectionOptio
     rejections,
     gate: new LlmGate({
       maxConcurrent: options.maxConcurrentLlm ?? 2,
+      clientQuota: new ClientDailyQuota({ perClientCap: options.dailyLlmPerClientCap ?? 20, now }),
       dailyCap: options.dailyLlmCap ?? 100,
       now,
       ...(options.countLlmRequestsToday ? { countToday: options.countLlmRequestsToday } : {}),

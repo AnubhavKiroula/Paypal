@@ -27,7 +27,7 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
    | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | mandate-api | Sandbox app credentials (developer.paypal.com → Apps & Credentials → **Sandbox**) | Purchases |
    | `LLM_API_KEY` | mandate-api | NVIDIA API key from build.nvidia.com. The other `LLM_*` values are set in `render.yaml` ([llm-layer.md](llm-layer.md) section 9). Set the key only once abuse protection is deployed | Purchases |
    | `PURCHASES_ENABLED` | mandate-api | Unset or `true`; `false` is the kill switch (see below) | Optional |
-   | `TRUST_PROXY`, `LLM_DAILY_REQUEST_CAP`, `LLM_MAX_CONCURRENT` | mandate-api | Set in `render.yaml`; see [Abuse protection](#abuse-protection) | Client IP, LLM limits |
+   | `TRUST_PROXY`, `LLM_DAILY_REQUEST_CAP`, `LLM_DAILY_PER_IP_CAP`, `LLM_MAX_CONCURRENT` | mandate-api | Set in `render.yaml`; see [Abuse protection](#abuse-protection) | Client IP, LLM limits |
    | `WEB_ORIGIN` | mandate-api | The web app URL, no trailing slash | The browser calling the API (CORS) |
    | `WEB_APP_URL` | mandate-api | The web app URL | Review links in approval messages |
    | `ZAPIER_APPROVAL_WEBHOOK_URL` | mandate-api | Zapier Catch Hook ([zapier.md](zapier.md)) | Approval messages (optional) |
@@ -61,11 +61,13 @@ The API has no login, so these limits bound what an anonymous client can spend (
 | `/health`, `/ready` | never limited (Render polls them) | |
 | LLM requests in flight | `LLM_MAX_CONCURRENT` (default 2) | `503 LLM_BUSY` |
 | LLM requests per UTC day | `LLM_DAILY_REQUEST_CAP` (default 100) | `429 LLM_DAILY_CAP`, `Retry-After` until midnight UTC |
+| LLM requests per client per UTC day | `LLM_DAILY_PER_IP_CAP` (default 20), so one client cannot use up the day | `429 LLM_DAILY_CLIENT_CAP`, `Retry-After` until midnight UTC |
 | Request body | 64 KiB | `413 PAYLOAD_TOO_LARGE` |
 | Kill switch | `PURCHASES_ENABLED=false` | `503 PURCHASES_DISABLED` on new purchases, capture and `APPROVE` decisions. See below for exactly what it stops |
 
 - **The daily cap is counted in Postgres**, as the number of `purchase_request` rows created since midnight UTC: each one is what triggers the LLM calls (intent, then ranking). It survives restarts and the free plan's spin-down, and needs no extra table. A concurrency slot is taken before the count is read, so the cap can be overshot by at most `LLM_MAX_CONCURRENT - 1`. If the count cannot be read, LLM requests are refused (`503 LLM_CAP_UNAVAILABLE`).
-- **Per-IP limits are in memory**, per instance; a restart resets them, which is acceptable for per-minute windows.
+- **Per-IP limits are in memory**, per instance; a restart resets them, which is acceptable for per-minute windows. A client is an IPv4 address or an IPv6 /64 (`::ffff:a.b.c.d` counts as the IPv4 client). Memory is capped at 50,000 clients per limit, evicting the oldest first; an evicted client just starts a fresh window.
+- **The per-client daily quota is in memory too**, so a restart or the free plan's spin-down resets it; the Postgres-backed global cap still holds. It stores salted SHA-256 hashes of the client key (random salt per process), never raw IPs. It is spent before the global count is read and given back if the global cap refuses.
 - **Client IP behind Render's proxy.** `TRUST_PROXY` lists the proxy addresses or CIDRs whose `X-Forwarded-For` entries are trusted. Fastify walks the header from the right and stops at the first untrusted address, so a forged left-most entry is ignored. It is never `true` (which would trust the forgeable left-most entry), and not a hop count (Fastify 5.12 ignores numeric `trustProxy` by design). If the setting is too narrow, all clients share the proxy's address and are limited together: safe, but strict.
 - **Kill switch:** set `PURCHASES_ENABLED=false` on mandate-api and redeploy. The boot log says `feature disabled: PURCHASES_ENABLED=false`. It is enforced at one choke point in `PurchaseService`: every PayPal call that creates or captures an order goes through it, so no route, webhook or job can move money while it is off. The routes also answer early with `503`.
 

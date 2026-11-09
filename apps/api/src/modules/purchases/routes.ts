@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { parseRequest } from '../../http/errors.js';
-import { type PurchaseGuard, refuse } from '../../http/protection.js';
+import { clientKey, type PurchaseGuard, refuse } from '../../http/protection.js';
 import { PurchaseError, type PurchaseErrorCode, type PurchaseService } from './service.js';
 
 const SubmitBodySchema = z.strictObject({
@@ -64,7 +64,7 @@ export function purchaseRoutes(service: PurchaseService, guard: PurchaseGuard) {
       const off = switchedOff(request, reply);
       if (off) return off;
       // Intent parsing and ranking call the LLM: admit only within the concurrency limit and the daily cap.
-      const entered = await guard.gate.enter();
+      const entered = await guard.gate.enter(clientKey(request.ip));
       if (!entered.ok) {
         guard.rejections.count(entered.code.toLowerCase());
         return refuse(request, reply, entered.code, entered.retryAfterMs);

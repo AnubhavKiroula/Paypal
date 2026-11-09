@@ -30,6 +30,7 @@ const app = await buildApp({
     purchasesEnabled: config.purchasesEnabled,
     trustedProxies: config.trustedProxies,
     dailyLlmCap: config.llmDailyRequestCap,
+    dailyLlmPerClientCap: config.llmDailyPerIpCap,
     maxConcurrentLlm: config.llmMaxConcurrent,
   },
   compose: (log) => {

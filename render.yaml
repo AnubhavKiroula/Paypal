@@ -74,6 +74,9 @@ services:
         value: 10.0.0.0/8
       - key: LLM_DAILY_REQUEST_CAP
         value: "100"
+      # Per client (IPv4, or IPv6 /64) per UTC day, below the global cap. In memory: a restart resets it.
+      - key: LLM_DAILY_PER_IP_CAP
+        value: "20"
       - key: LLM_MAX_CONCURRENT
         value: "2"
 

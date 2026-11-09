@@ -7,6 +7,7 @@ import { loadMigrations, migrate } from '../src/db/migrate.js';
 import { DEMO_IDS, seed } from '../src/db/seed.js';
 import {
   bucketsFor,
+  ClientDailyQuota,
   clientKey,
   FixedWindowLimiter,
   LlmGate,
@@ -320,6 +321,85 @@ describe('concurrency limit on LLM requests', () => {
   });
 });
 
+describe('per-client daily LLM quota (finding 3)', () => {
+  const NOON = Date.parse('2026-11-08T12:00:00Z');
+
+  it('refuses a client past its quota with LLM_DAILY_CLIENT_CAP until midnight UTC, others unaffected', () => {
+    let now = NOON;
+    const quota = new ClientDailyQuota({ perClientCap: 2, now: () => now });
+    expect(quota.take('192.0.2.1')).toEqual({ allowed: true, retryAfterMs: 0 });
+    expect(quota.take('192.0.2.1').allowed).toBe(true);
+    expect(quota.take('192.0.2.1')).toEqual({ allowed: false, retryAfterMs: 12 * 3_600_000 });
+    expect(quota.take('192.0.2.2').allowed).toBe(true);
+    now = Date.parse('2026-11-09T00:00:00Z');
+    expect(quota.take('192.0.2.1').allowed).toBe(true);
+  });
+
+  it('gives a slot back when it is refunded', () => {
+    const quota = new ClientDailyQuota({ perClientCap: 1, now: () => NOON });
+    expect(quota.take('192.0.2.1').allowed).toBe(true);
+    quota.refund('192.0.2.1');
+    expect(quota.take('192.0.2.1').allowed).toBe(true);
+    expect(quota.take('192.0.2.1').allowed).toBe(false);
+  });
+
+  it('stores salted hashes, never raw IPs', () => {
+    const quota = new ClientDailyQuota({ perClientCap: 5, now: () => NOON });
+    quota.take('192.0.2.77');
+    quota.take('2001:db8:1:2::/64');
+    const stored = quota.storedKeys();
+    expect(stored).toHaveLength(2);
+    expect(stored.join(' ')).not.toMatch(/192\.0\.2\.77|2001:db8/);
+    // Another process (another salt) derives different keys.
+    const other = new ClientDailyQuota({ perClientCap: 5, now: () => NOON });
+    other.take('192.0.2.77');
+    expect(other.storedKeys()[0]).not.toBe(stored[0]);
+  });
+
+  it('is bounded: never more than maxKeys clients, oldest evicted first', () => {
+    const quota = new ClientDailyQuota({ perClientCap: 1, now: () => NOON, maxKeys: 5 });
+    for (let i = 0; i < 100; i++) {
+      quota.take(`198.51.100.${i}`);
+      expect(quota.storedKeys().length).toBeLessThanOrEqual(5);
+    }
+    expect(quota.take('198.51.100.99').allowed).toBe(false);
+  });
+
+  it('is enforced inside the gate before the global count, and refunded if the global cap refuses', async () => {
+    let today = 0;
+    const quota = new ClientDailyQuota({ perClientCap: 1, now: () => NOON });
+    const gate = new LlmGate({ maxConcurrent: 5, dailyCap: 1, countToday: () => Promise.resolve(today), now: () => NOON, clientQuota: quota });
+    today = 1; // global cap reached
+    expect(await gate.enter('192.0.2.9')).toMatchObject({ ok: false, code: 'LLM_DAILY_CAP' });
+    today = 0;
+    const admitted = await gate.enter('192.0.2.9');
+    expect(admitted.ok).toBe(true);
+    if (admitted.ok) admitted.release();
+    expect(await gate.enter('192.0.2.9')).toEqual({ ok: false, code: 'LLM_DAILY_CLIENT_CAP', retryAfterMs: 12 * 3_600_000 });
+  });
+
+  it('answers 429 LLM_DAILY_CLIENT_CAP over HTTP per client, and counts it', async () => {
+    const stub = stubPurchases();
+    const rejections = new Rejections(memoryLog());
+    const a = await app({
+      purchases: stub.service,
+      protection: { dailyLlmPerClientCap: 1, countLlmRequestsToday: () => Promise.resolve(0), rejections },
+    });
+    const first = post(a, `/mandates/${MANDATE}/purchases`, submitBody(30), {}, '203.0.113.40');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.finishAll();
+    expect((await first).statusCode).toBe(201);
+    const second = await post(a, `/mandates/${MANDATE}/purchases`, submitBody(31), {}, '203.0.113.40');
+    expect(second.statusCode).toBe(429);
+    expect(second.json()).toMatchObject({ error: 'LLM_DAILY_CLIENT_CAP' });
+    const other = post(a, `/mandates/${MANDATE}/purchases`, submitBody(32), {}, '203.0.113.41');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.finishAll();
+    expect((await other).statusCode).toBe(201);
+    expect(rejections.snapshot()).toEqual({ llm_daily_client_cap: 1 });
+  });
+});
+
 describe('daily LLM cap, counted in Postgres', () => {
   let db: Db;
   beforeAll(async () => {
@@ -405,8 +485,12 @@ describe('Rejections', () => {
 });
 
 describe('protection settings in loadApiConfig', () => {
-  it('defaults: purchases on, no trusted proxies, cap 100 per day, 2 in flight', () => {
-    expect(loadApiConfig({})).toMatchObject({ purchasesEnabled: true, trustedProxies: [], llmDailyRequestCap: 100, llmMaxConcurrent: 2 });
+  it('defaults: purchases on, no trusted proxies, cap 100 per day and 20 per client, 2 in flight', () => {
+    expect(loadApiConfig({})).toMatchObject({ purchasesEnabled: true, trustedProxies: [], llmDailyRequestCap: 100, llmDailyPerIpCap: 20, llmMaxConcurrent: 2 });
+  });
+
+  it('reads the per-client quota', () => {
+    expect(loadApiConfig({ LLM_DAILY_PER_IP_CAP: '5' })).toMatchObject({ llmDailyPerIpCap: 5 });
   });
 
   it('reads explicit values', () => {
@@ -425,6 +509,7 @@ describe('protection settings in loadApiConfig', () => {
     ['TRUST_PROXY', '*'],
     ['LLM_DAILY_REQUEST_CAP', '1.5'],
     ['LLM_MAX_CONCURRENT', '0'],
+    ['LLM_DAILY_PER_IP_CAP', '-1'],
   ])('rejects %s=%s', (name, value) => {
     expect(() => loadApiConfig({ [name]: value })).toThrow(name);
   });

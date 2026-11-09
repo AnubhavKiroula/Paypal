@@ -91,10 +91,12 @@ export function purchaseRoutes(service: PurchaseService, guard: PurchaseGuard) {
     });
 
     app.post('/approvals/decision', async (request, reply) => {
-      // An approval pays for the order, so it is a payment route.
-      const off = switchedOff(request, reply);
-      if (off) return off;
       const body = parseRequest(ApprovalDecisionSchema, request.body);
+      // Only APPROVE pays for the order. REJECT stays available with the switch off, so the budget hold is released.
+      if (body.decision === 'APPROVE') {
+        const off = switchedOff(request, reply);
+        if (off) return off;
+      }
       try {
         return await reply.send(await service.decideApproval(body.token, body.decision, body.channel));
       } catch (error) {

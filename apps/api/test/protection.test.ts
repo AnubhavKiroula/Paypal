@@ -172,6 +172,21 @@ describe('PURCHASES_ENABLED kill switch', () => {
     expect(rejections.snapshot()).toEqual({ purchases_disabled: 3 });
   });
 
+  it('lets a REJECT decision through to the service, so the hold can be released (finding 2)', async () => {
+    let decided: string | undefined;
+    const service = {
+      ...stubPurchases().service,
+      decideApproval: (_token: string, decision: string) => {
+        decided = decision;
+        return Promise.resolve({ id: 'p-1', mandateId: MANDATE, status: 'REJECTED' });
+      },
+    } as unknown as PurchaseService;
+    const a = await app({ purchases: service, protection: { purchasesEnabled: false } });
+    const rejected = await post(a, '/approvals/decision', { token: 'a'.repeat(43), decision: 'REJECT' });
+    expect(rejected.statusCode).toBe(200);
+    expect(decided).toBe('REJECT');
+  });
+
   it('keeps /health, /ready and read routes up', async () => {
     const a = await app({ purchases: stubPurchases().service, protection: { purchasesEnabled: false } });
     expect((await a.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);

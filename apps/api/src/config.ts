@@ -37,6 +37,8 @@ const ApiEnvSchema = z.object({
   LLM_DAILY_PER_IP_CAP: z.coerce.number().int().min(0).max(100_000).default(20),
   // Purchase requests calling the LLM at the same time.
   LLM_MAX_CONCURRENT: z.coerce.number().int().min(1).max(20).default(2),
+  // Opt-in diagnostic to verify TRUST_PROXY on the deployed API: hop counts and a salted client hash, never raw IPs.
+  DEBUG_PROXY_HOPS: z.enum(['true', 'false']).default('false'),
 });
 
 export interface ApiConfig {
@@ -50,6 +52,7 @@ export interface ApiConfig {
   llmDailyRequestCap: number;
   llmDailyPerIpCap: number;
   llmMaxConcurrent: number;
+  debugProxyHops: boolean;
 }
 
 /** Names the invalid variables only. Values never appear in the message: some of them will be secrets. */
@@ -70,7 +73,7 @@ export function loadApiConfig(env: NodeJS.ProcessEnv): ApiConfig {
   if (!result.success) {
     throw new ApiConfigError([...new Set(result.error.issues.map((issue) => String(issue.path[0])))]);
   }
-  const { PORT, HOST, LOG_LEVEL, DATABASE_URL, WEB_ORIGIN, PURCHASES_ENABLED, TRUST_PROXY, LLM_DAILY_REQUEST_CAP, LLM_DAILY_PER_IP_CAP, LLM_MAX_CONCURRENT } = result.data;
+  const { PORT, HOST, LOG_LEVEL, DATABASE_URL, WEB_ORIGIN, PURCHASES_ENABLED, TRUST_PROXY, LLM_DAILY_REQUEST_CAP, LLM_DAILY_PER_IP_CAP, LLM_MAX_CONCURRENT, DEBUG_PROXY_HOPS } = result.data;
   return {
     port: PORT,
     host: HOST,
@@ -80,6 +83,7 @@ export function loadApiConfig(env: NodeJS.ProcessEnv): ApiConfig {
     llmDailyRequestCap: LLM_DAILY_REQUEST_CAP,
     llmDailyPerIpCap: LLM_DAILY_PER_IP_CAP,
     llmMaxConcurrent: LLM_MAX_CONCURRENT,
+    debugProxyHops: DEBUG_PROXY_HOPS === 'true',
     ...(DATABASE_URL === undefined ? {} : { databaseUrl: DATABASE_URL }),
     ...(WEB_ORIGIN === undefined ? {} : { webOrigins: WEB_ORIGIN }),
   };

@@ -28,6 +28,7 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
    | `LLM_API_KEY` | mandate-api | NVIDIA API key from build.nvidia.com. The other `LLM_*` values are set in `render.yaml` ([llm-layer.md](llm-layer.md) section 9). Set the key only once abuse protection is deployed | Purchases |
    | `PURCHASES_ENABLED` | mandate-api | Unset or `true`; `false` is the kill switch (see below) | Optional |
    | `TRUST_PROXY`, `LLM_DAILY_REQUEST_CAP`, `LLM_DAILY_PER_IP_CAP`, `LLM_MAX_CONCURRENT` | mandate-api | Set in `render.yaml`; see [Abuse protection](#abuse-protection) | Client IP, LLM limits |
+   | `DEBUG_PROXY_HOPS` | mandate-api | Unset (off). `true` only while verifying `TRUST_PROXY` (see Abuse protection) | Optional |
    | `WEB_ORIGIN` | mandate-api | The web app URL, no trailing slash | The browser calling the API (CORS) |
    | `WEB_APP_URL` | mandate-api | The web app URL | Review links in approval messages |
    | `ZAPIER_APPROVAL_WEBHOOK_URL` | mandate-api | Zapier Catch Hook ([zapier.md](zapier.md)) | Approval messages (optional) |
@@ -83,7 +84,19 @@ The API has no login, so these limits bound what an anonymous client can spend (
 
   When the switch is back on, the 60 s reconcile job picks up every deferred order: it captures it if PayPal still reports the order `APPROVED` and accepts the capture. If PayPal refuses (for example, the buyer's approval has expired), the order becomes `FAILED` with `CAPTURE_REFUSED_AFTER_DEFERRAL` and its budget hold is released. A `VOIDED` order fails as before.
 
-`VERIFY` on the deployed API, once: (1) from one machine, send 11 `POST /approvals/preview` requests, each with a different made-up `X-Forwarded-For`; the 11th must be `429`, which shows spoofing does not bypass the limit. (2) From a second network (for example a phone hotspot), the same route must still answer `400`, which shows clients are not all sharing the proxy's address. If (2) fails, widen `TRUST_PROXY` to the proxy addresses the logs show.
+`VERIFY` on the deployed API, once, with the `DEBUG_PROXY_HOPS` diagnostic. It logs one `proxy diagnostic` line per request with `xffHops` (how many `X-Forwarded-For` entries arrived), `pickedHop` (which one became the client IP: `0` is the socket peer, meaning the proxy itself was not trusted; `1` is the right-most forwarded entry) and `clientHash` (a salted hash of the client, stable within one process). It never logs a raw IP.
+
+1. mandate-api → **Environment** → add `DEBUG_PROXY_HOPS` = `true` → **Save, rebuild, and deploy**. Wait for **Live**.
+2. From network A (for example home Wi-Fi), run three times: `curl -s -o /dev/null -w "%{http_code}\n" https://<api-url>/health`
+3. From network B (for example a phone hotspot), run the same command three times.
+4. Spoofing check, from network A: `for i in $(seq 1 11); do curl -s -o /dev/null -w "%{http_code} " -X POST -H "content-type: application/json" -H "X-Forwarded-For: 203.0.113.$i" -d '{"token":"x"}' https://<api-url>/approvals/preview; done; echo`. The first ten should be `400` and the 11th `429`.
+5. mandate-api → **Logs**, search `proxy diagnostic`. Expected:
+   - `pickedHop` is the same small number (`1` if Render adds one hop) on every line, and `xffHops` is `pickedHop` or more.
+   - Network A's three lines share one `clientHash`, network B's share a **different** one.
+   - Step 4's eleven lines all show network A's hash, despite the eleven different spoofed values.
+6. mandate-api → **Environment** → delete `DEBUG_PROXY_HOPS` (or set `false`) → redeploy.
+
+Reading the result: if `pickedHop` is `0`, the proxy's address is outside `TRUST_PROXY`, so all clients share one bucket (safe but strict); if the hash changes on every line from one network, a rotating CDN edge is being picked, so unrelated users share buckets and an attacker could get fresh ones. In either case, report `xffHops` and `pickedHop` and widen or narrow `TRUST_PROXY` before relying on the per-IP limits.
 
 ## PayPal webhook
 

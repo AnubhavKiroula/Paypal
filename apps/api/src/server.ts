@@ -32,6 +32,7 @@ const app = await buildApp({
     dailyLlmCap: config.llmDailyRequestCap,
     dailyLlmPerClientCap: config.llmDailyPerIpCap,
     maxConcurrentLlm: config.llmMaxConcurrent,
+    debugProxyHops: config.debugProxyHops,
   },
   compose: (log) => {
     services = compose({ env: process.env, ...(db ? { db } : {}), log, purchasesEnabled: config.purchasesEnabled });

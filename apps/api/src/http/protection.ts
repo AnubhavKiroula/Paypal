@@ -320,6 +320,31 @@ export interface ProtectionOptions {
   countLlmRequestsToday?: () => Promise<number>;
   now?: () => number;
   rejections?: Rejections;
+  /** DEBUG_PROXY_HOPS: log how the client IP was derived, to verify TRUST_PROXY on the deployed API. Off by default. */
+  debugProxyHops?: boolean;
+  /** Where the diagnostic goes; defaults to the app logger (tests capture it). */
+  diagnosticLog?: { info(fields: Record<string, unknown>, message: string): void };
+}
+
+/**
+ * Logs, per request, how many X-Forwarded-For hops arrived, which hop became request.ip (0: the socket peer, i.e. the
+ * proxy itself was not trusted; 1: the right-most forwarded entry; and so on) and a salted hash of the client key.
+ * The hash is stable for one client within a process and never reversible to the IP: no raw address is logged.
+ */
+function installProxyDiagnostic(app: FastifyInstance, log: NonNullable<ProtectionOptions['diagnosticLog']>): void {
+  const salt = randomBytes(16);
+  app.addHook('onRequest', (request, _reply, done) => {
+    const entries = [request.headers['x-forwarded-for'] ?? []]
+      .flat()
+      .join(',')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const chain = [request.socket.remoteAddress ?? '', ...[...entries].reverse()];
+    const clientHash = createHash('sha256').update(salt).update(clientKey(request.ip)).digest('hex').slice(0, 16);
+    log.info({ xffHops: entries.length, pickedHop: chain.indexOf(request.ip), clientHash }, 'proxy diagnostic');
+    done();
+  });
 }
 
 /** What the purchase routes need to enforce the kill switch and the LLM gate. */
@@ -336,6 +361,8 @@ export interface PurchaseGuard {
 export function installProtection(app: FastifyInstance, options: ProtectionOptions = {}): PurchaseGuard {
   const now = options.now ?? Date.now;
   const rejections = options.rejections ?? new Rejections(app.log);
+  // First, so requests the limits refuse are diagnosed too.
+  if (options.debugProxyHops) installProxyDiagnostic(app, options.diagnosticLog ?? app.log);
   const limiters = Object.fromEntries(
     (Object.keys(RATE_LIMITS) as Bucket[]).map((bucket) => [
       bucket,

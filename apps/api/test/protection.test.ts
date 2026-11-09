@@ -268,6 +268,51 @@ describe('client IP behind a proxy', () => {
   });
 });
 
+describe('DEBUG_PROXY_HOPS diagnostic (deployed VERIFY of TRUST_PROXY)', () => {
+  function captureInfo() {
+    const lines: { fields: Record<string, unknown>; message: string }[] = [];
+    return { lines, info: (fields: Record<string, unknown>, message: string) => void lines.push({ fields, message }) };
+  }
+  const PROXY = '10.0.0.5';
+
+  it('logs the hop count, the hop the app picked and a salted client hash, never a raw IP', async () => {
+    const log = captureInfo();
+    const a = await app({ protection: { trustedProxies: ['10.0.0.0/8'], debugProxyHops: true, diagnosticLog: log } });
+    const hit = (xff: string) => a.inject({ method: 'GET', url: '/health', headers: { 'x-forwarded-for': xff }, remoteAddress: PROXY });
+    await hit('8.8.8.8, 192.0.2.44');
+    await hit('1.1.1.1, 192.0.2.44');
+    await hit('198.51.100.7');
+    expect(log.lines.map((l) => l.message)).toEqual(['proxy diagnostic', 'proxy diagnostic', 'proxy diagnostic']);
+    const [first, second, third] = log.lines.map((l) => l.fields);
+    expect(first).toMatchObject({ xffHops: 2, pickedHop: 1 });
+    expect(first?.['clientHash']).toMatch(/^[0-9a-f]{16}$/);
+    // Same real client behind a different spoofed left-most entry: same hash. Another client: another hash.
+    expect(second?.['clientHash']).toBe(first?.['clientHash']);
+    expect(third?.['clientHash']).not.toBe(first?.['clientHash']);
+    expect(JSON.stringify(log.lines)).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
+  });
+
+  it('reports hop 0 when the proxy is not trusted (everyone would share its address)', async () => {
+    const log = captureInfo();
+    const a = await app({ protection: { debugProxyHops: true, diagnosticLog: log } });
+    await a.inject({ method: 'GET', url: '/health', headers: { 'x-forwarded-for': '192.0.2.44' }, remoteAddress: PROXY });
+    expect(log.lines[0]?.fields).toMatchObject({ xffHops: 1, pickedHop: 0 });
+  });
+
+  it('is off by default', async () => {
+    const log = captureInfo();
+    const a = await app({ protection: { trustedProxies: ['10.0.0.0/8'], diagnosticLog: log } });
+    await a.inject({ method: 'GET', url: '/health', headers: { 'x-forwarded-for': '192.0.2.44' }, remoteAddress: PROXY });
+    expect(log.lines).toEqual([]);
+  });
+
+  it('is read from DEBUG_PROXY_HOPS, default false', () => {
+    expect(loadApiConfig({})).toMatchObject({ debugProxyHops: false });
+    expect(loadApiConfig({ DEBUG_PROXY_HOPS: 'true' })).toMatchObject({ debugProxyHops: true });
+    expect(() => loadApiConfig({ DEBUG_PROXY_HOPS: 'yes' })).toThrow('DEBUG_PROXY_HOPS');
+  });
+});
+
 describe('PURCHASES_ENABLED kill switch', () => {
   it('turns off the LLM and payment routes with 503 PURCHASES_DISABLED, and counts it', async () => {
     const stub = stubPurchases();

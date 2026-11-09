@@ -72,6 +72,10 @@ services:
       # spoofed X-Forwarded-For must not bypass the limit, and two networks must not share one bucket.
       - key: TRUST_PROXY
         value: 10.0.0.0/8
+      # Opt-in diagnostic for the VERIFY above (docs/deploy.md): set "true" in the dashboard, test, then remove it.
+      # Logs hop counts and a salted client hash, never raw IPs. Unset or "false": off.
+      - key: DEBUG_PROXY_HOPS
+        sync: false
       - key: LLM_DAILY_REQUEST_CAP
         value: "100"
       # Per client (IPv4, or IPv6 /64) per UTC day, below the global cap. In memory: a restart resets it.

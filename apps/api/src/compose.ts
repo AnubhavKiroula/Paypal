@@ -21,6 +21,8 @@ export interface ComposeOptions {
   paypalFetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** Tests inject a fake fetch for the Zapier webhook. */
   zapierFetch?: (url: string, init: RequestInit) => Promise<Response>;
+  /** PURCHASES_ENABLED (#62). Default true. Off: the purchase service refuses every money-moving and LLM path. */
+  purchasesEnabled?: boolean;
 }
 
 /** A feature that is off, and the variable names (never values) that would turn it on. */
@@ -105,6 +107,7 @@ export function compose(options: ComposeOptions): Composition {
     ranker: new LlmRanker(client),
     payments: paypal.gateway,
     ...(approvalNotifier ? { approvalNotifier } : {}),
+    ...(options.purchasesEnabled === undefined ? {} : { paymentsEnabled: options.purchasesEnabled }),
   });
   const countLlmRequestsToday = () => purchaseRequestsToday(db, new Date());
   if (!paypal.webhooksEnabled) {

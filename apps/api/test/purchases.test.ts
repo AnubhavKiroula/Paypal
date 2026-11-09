@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { CandidateSchema, type Candidate, type Money, type Proposal, type PurchaseIntent } from '@mandate/shared';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -116,6 +117,8 @@ interface Setup {
   notifier?: ApprovalNotifier;
   requote?: (ids: readonly string[]) => Promise<ReadonlyMap<string, Money>>;
   now?: () => Date;
+  /** PURCHASES_ENABLED (#62). Default on. */
+  paymentsEnabled?: boolean;
 }
 
 /** HTTP tests here exercise the purchase flow, not the daily LLM cap (#62): a counter that always reads 0. */
@@ -135,6 +138,7 @@ function service(setup: Setup = {}, payments = new FakePayments()) {
     },
     ranker: { rank: () => (setup.rankError ? Promise.reject(setup.rankError) : Promise.resolve((setup.proposal ?? propose([c1.id, 2])) as Proposal)) },
     payments,
+    ...(setup.paymentsEnabled === undefined ? {} : { paymentsEnabled: setup.paymentsEnabled }),
   });
   return { svc, payments };
 }
@@ -858,5 +862,198 @@ describe('purchase routes', () => {
     const res = await app.inject({ method: 'GET', url: '/purchases/00000000-0000-4000-8000-0000000000ff' });
     expect(res.statusCode).toBe(500);
     expect(res.body).not.toContain('secret');
+  });
+});
+
+describe('kill switch (PURCHASES_ENABLED=false) at the PurchaseService choke point (#62)', () => {
+  /** A PayPal adapter that fails the test if any money-moving call reaches it. Reads still answer. */
+  class MoneyTripwire extends FakePayments {
+    moneyCalls = 0;
+    override createOrder(): Promise<GatewayOrder> {
+      this.moneyCalls += 1;
+      throw new Error('createOrder reached PayPal with the kill switch off');
+    }
+    override captureOrder(): Promise<GatewayOrder> {
+      this.moneyCalls += 1;
+      throw new Error('captureOrder reached PayPal with the kill switch off');
+    }
+  }
+
+  /** An ALLOW-ed order created with the switch on, then a switched-off service over the same database. */
+  async function pendingOrder() {
+    const mandateId = await newMandate();
+    const { svc: on } = service();
+    const { view } = await submit(on, mandateId);
+    const tripwire = new MoneyTripwire();
+    tripwire.getResult = { providerOrderId: 'PP123', status: 'APPROVED' };
+    const { svc: off } = service({ paymentsEnabled: false }, tripwire);
+    return { view, off, tripwire, mandateId };
+  }
+
+  const orderOf = async (requestId: string) =>
+    (
+      await db.query<{ state: string; capture_deferred_at: Date | null }>(
+        'SELECT state, capture_deferred_at FROM payment_order WHERE purchase_request_id = $1',
+        [requestId],
+      )
+    ).rows[0];
+  const reservationOf = async (requestId: string) =>
+    (
+      await db.query<{ state: string }>(
+        'SELECT br.state FROM budget_reservation br JOIN policy_decision pd ON pd.id = br.policy_decision_id WHERE pd.purchase_request_id = $1',
+        [requestId],
+      )
+    ).rows[0]?.state;
+  const deferredEvents = (requestId: string) =>
+    count(
+      "SELECT count(*) AS n FROM order_event oe JOIN payment_order o ON o.id = oe.order_id WHERE o.purchase_request_id = $1 AND oe.event_type = 'capture_deferred'",
+      [requestId],
+    );
+
+  it('refuses a new purchase before any LLM call or row is written', async () => {
+    const tripwire = new MoneyTripwire();
+    // Reaching the LLM would surface this error instead of PURCHASES_DISABLED.
+    const { svc } = service({ paymentsEnabled: false, intentResult: new Error('the LLM was called') }, tripwire);
+    const mandateId = await newMandate();
+    const before = await count('SELECT count(*) AS n FROM purchase_request');
+    await expect(svc.submit({ mandateId, requesterUserId: DEMO_IDS.requester, text: 'pens', requestKey: `ks-${next()}-0000` })).rejects.toMatchObject({
+      code: 'PURCHASES_DISABLED',
+    });
+    expect(await count('SELECT count(*) AS n FROM purchase_request')).toBe(before);
+    expect(tripwire.moneyCalls).toBe(0);
+  });
+
+  it('still answers an idempotent replay of an existing request from the database', async () => {
+    const mandateId = await newMandate();
+    const { svc: on } = service();
+    const input = { mandateId, requesterUserId: DEMO_IDS.requester, text: 'two gel pens', requestKey: `ks-replay-${next()}` };
+    const first = await on.submit(input);
+    const { svc: off } = service({ paymentsEnabled: false }, new MoneyTripwire());
+    expect(await off.submit(input)).toEqual({ view: first.view, created: false });
+  });
+
+  it('refuses capture and leaves the order untouched', async () => {
+    const { view, off, tripwire } = await pendingOrder();
+    await expect(off.capture(view.id)).rejects.toMatchObject({ code: 'PURCHASES_DISABLED' });
+    expect(await orderOf(view.id)).toMatchObject({ state: 'PAYMENT_PENDING', capture_deferred_at: null });
+    expect(tripwire.moneyCalls).toBe(0);
+  });
+
+  it('defers the capture a webhook or reconcile would start, records it once, and never moves money', async () => {
+    const { view, off, tripwire } = await pendingOrder();
+    expect((await off.reconcile(view.id)).status).toBe('PAYMENT_PENDING');
+    expect((await orderOf(view.id))?.capture_deferred_at).toBeInstanceOf(Date);
+    expect(await deferredEvents(view.id)).toBe(1);
+    // A redelivery or the job finds it again: nothing new is recorded.
+    await off.reconcile(view.id);
+    await off.reconcileUnknown();
+    expect(await deferredEvents(view.id)).toBe(1);
+    expect(tripwire.moneyCalls).toBe(0);
+  });
+
+  it('answers a verified webhook with 200, records the event, and defers the capture', async () => {
+    const { view, off, tripwire } = await pendingOrder();
+    const providerOrderId = `PPKS${next()}`;
+    await db.query('UPDATE payment_order SET provider_order_id = $2 WHERE purchase_request_id = $1', [view.id, providerOrderId]);
+    tripwire.getResult = { providerOrderId, status: 'APPROVED' };
+    const handler = new PaypalWebhookHandler({ db, payments: tripwire, purchases: off });
+    const eventId = `WH-KS-${next()}`;
+    const event = { id: eventId, event_type: 'CHECKOUT.ORDER.APPROVED', resource: { id: providerOrderId, status: 'APPROVED' } };
+    expect(await handler.handle({}, event)).toEqual({ status: 200, result: 'processed' });
+    expect(await count('SELECT count(*) AS n FROM webhook_event WHERE provider_event_id = $1 AND signature_verified', [eventId])).toBe(1);
+    expect((await orderOf(view.id))?.capture_deferred_at).toBeInstanceOf(Date);
+    expect(tripwire.moneyCalls).toBe(0);
+  });
+
+  it('does not retry an unconfirmed order creation while off', async () => {
+    const mandateId = await newMandate();
+    const payments = new FakePayments();
+    payments.createResult = new GatewayError('UNKNOWN_OUTCOME', 'UNKNOWN_OUTCOME');
+    const { svc: on } = service({}, payments);
+    const { view } = await submit(on, mandateId);
+    const tripwire = new MoneyTripwire();
+    const { svc: off } = service({ paymentsEnabled: false }, tripwire);
+    expect((await off.reconcile(view.id)).status).toBe('UNKNOWN_OUTCOME');
+    await off.reconcileUnknown();
+    expect(tripwire.moneyCalls).toBe(0);
+  });
+
+  it('back on: the reconcile job captures a deferred order when PayPal still allows it', async () => {
+    const { view, off, tripwire } = await pendingOrder();
+    await off.reconcile(view.id);
+    expect(tripwire.moneyCalls).toBe(0);
+    const payments = new FakePayments();
+    payments.getResult = { providerOrderId: 'PP123', status: 'APPROVED' };
+    const { svc: on } = service({}, payments);
+    await on.reconcileUnknown();
+    expect((await on.get(view.id)).status).toBe('CAPTURED');
+    expect((await orderOf(view.id))?.capture_deferred_at).toBeNull();
+    // The job also settles orders other tests deferred in this shared database: count this order's captures only.
+    expect(payments.captures.filter((c) => c.key === `cap-${view.order?.id ?? ''}`)).toHaveLength(1);
+  });
+
+  it('back on: a deferred order PayPal no longer lets us capture is marked FAILED and its hold released', async () => {
+    const { view, off } = await pendingOrder();
+    await off.reconcile(view.id);
+    const payments = new FakePayments();
+    payments.getResult = { providerOrderId: 'PP123', status: 'APPROVED' };
+    payments.captureResult = new GatewayError('REJECTED', 'PAYPAL_UNPROCESSABLE');
+    const { svc: on } = service({}, payments);
+    await on.reconcileUnknown();
+    expect(await on.get(view.id)).toMatchObject({ status: 'FAILED', failureCode: 'CAPTURE_REFUSED_AFTER_DEFERRAL' });
+    expect(await reservationOf(view.id)).toBe('RELEASED');
+    expect((await orderOf(view.id))?.capture_deferred_at).toBeNull();
+  });
+
+  describe('approvals while off', () => {
+    async function pendingApprovalOff() {
+      const mandateId = await newMandate();
+      const desk = candidate(40, 15_000);
+      const chair = candidate(41, 15_000);
+      const sent: ApprovalRequest[] = [];
+      const notifier: ApprovalNotifier = {
+        notify: (r) => {
+          sent.push(r);
+          return Promise.resolve();
+        },
+      };
+      const setup: Setup = { products: [product(desk), product(chair)], proposal: propose([desk.id, 1], [chair.id, 1]), notifier };
+      const { svc: on } = service(setup);
+      const { view } = await submit(on, mandateId);
+      const tripwire = new MoneyTripwire();
+      const { svc: off } = service({ ...setup, paymentsEnabled: false }, tripwire);
+      return { view, off, tripwire, setup, token: sent[0]?.token ?? '' };
+    }
+
+    it('refuses APPROVE and leaves the approval pending', async () => {
+      const { view, off, tripwire, token } = await pendingApprovalOff();
+      await expect(off.decideApproval(token, 'APPROVE', 'email')).rejects.toMatchObject({ code: 'PURCHASES_DISABLED' });
+      expect(await count("SELECT count(*) AS n FROM approval WHERE purchase_request_id = $1 AND status = 'PENDING'", [view.id])).toBe(1);
+      expect(tripwire.moneyCalls).toBe(0);
+    });
+
+    it('allows REJECT and releases the budget hold', async () => {
+      const { view, off, tripwire, token } = await pendingApprovalOff();
+      expect((await off.decideApproval(token, 'REJECT', 'email')).status).toBe('REJECTED');
+      expect(await reservationOf(view.id)).toBe('RELEASED');
+      expect(tripwire.moneyCalls).toBe(0);
+    });
+
+    it('keeps the expiry sweep working', async () => {
+      const { view, tripwire, setup } = await pendingApprovalOff();
+      const later = new Date(NOW.getTime() + RESERVATION_TTL_MS + 1);
+      const { svc: offLater } = service({ ...setup, paymentsEnabled: false, now: () => later }, tripwire);
+      expect(await offLater.sweepExpired()).toBeGreaterThanOrEqual(1);
+      expect(await reservationOf(view.id)).toBe('RELEASED');
+      expect(tripwire.moneyCalls).toBe(0);
+    });
+  });
+
+  it('routes every PayPal money call through one choke point in PurchaseService', () => {
+    const source = readFileSync(new URL('../src/modules/purchases/service.ts', import.meta.url), 'utf8');
+    // Exactly one createOrder and one captureOrder call site, both on the gateway the choke point returns.
+    expect(source.match(/\.(createOrder|captureOrder)\(/g)).toHaveLength(2);
+    expect(source).not.toMatch(/payments\.(createOrder|captureOrder)\(/);
+    expect(source.match(/gateway\.(createOrder|captureOrder)\(/g)).toHaveLength(2);
   });
 });

@@ -30,7 +30,9 @@ export type PurchaseErrorCode =
   | 'PAYMENT_NOT_CAPTURABLE'
   | 'APPROVAL_NOT_FOUND'
   | 'APPROVAL_ALREADY_DECIDED'
-  | 'APPROVAL_EXPIRED';
+  | 'APPROVAL_EXPIRED'
+  /** PURCHASES_ENABLED=false (#62): the kill switch refuses anything that would move money or call the LLM. */
+  | 'PURCHASES_DISABLED';
 
 export class PurchaseError extends Error {
   readonly code: PurchaseErrorCode;
@@ -74,6 +76,8 @@ export interface PurchaseServiceDeps {
   /** Sends the approver their single-use link (Zapier, #26). Without one, approvals can only expire. */
   approvalNotifier?: ApprovalNotifier;
   now?: () => Date;
+  /** PURCHASES_ENABLED (#62). Default true. Off: no PayPal order is created or captured, and no LLM call starts. */
+  paymentsEnabled?: boolean;
 }
 
 export function hashToken(token: string): string {
@@ -90,6 +94,7 @@ interface OrderRow {
   organization_id: string;
   mandate_id: string;
   requester_user_id: string;
+  capture_deferred_at: Date | string | null;
 }
 
 interface ApprovalRow {
@@ -142,10 +147,22 @@ interface Context {
 export class PurchaseService {
   readonly #deps: PurchaseServiceDeps;
   readonly #now: () => Date;
+  readonly #paymentsEnabled: boolean;
 
   constructor(deps: PurchaseServiceDeps) {
     this.#deps = deps;
     this.#now = deps.now ?? (() => new Date());
+    this.#paymentsEnabled = deps.paymentsEnabled ?? true;
+  }
+
+  /**
+   * The one choke point for money (#62): every PayPal call that creates or captures an order uses the gateway this
+   * returns. With PURCHASES_ENABLED=false it throws, so no code path, route, webhook or job, can move money. Callers
+   * ask for it before their try block, so the refusal is never mistaken for an unknown payment outcome.
+   */
+  #moneyGateway(): Pick<PaymentGateway, 'createOrder' | 'captureOrder'> {
+    if (!this.#paymentsEnabled) throw new PurchaseError('PURCHASES_DISABLED');
+    return this.#deps.payments;
   }
 
   /** Idempotent on requestKey: a repeat returns the stored result and never pays twice. */
@@ -153,6 +170,8 @@ export class PurchaseService {
     const { db } = this.#deps;
     const existing = await this.#findByKey(input);
     if (existing) return { view: await this.get(existing), created: false };
+    // A new request calls the LLM and may pay: refused while the kill switch is off. Replays above still answer.
+    if (!this.#paymentsEnabled) throw new PurchaseError('PURCHASES_DISABLED');
 
     const owner = await db.query<{ organization_id: string }>(
       `SELECT m.organization_id FROM mandate m JOIN app_user u ON u.organization_id = m.organization_id
@@ -275,6 +294,8 @@ export class PurchaseService {
     const expected: Money = { amountMinor: Number(toBigInt(order.amount_minor_units)), currency: order.currency };
 
     if (order.provider_order_id === null) {
+      // Kill switch: no new order call; the job retries once payments are back on.
+      if (!this.#paymentsEnabled) return this.get(requestId);
       // The create call never confirmed. Retrying with the same PayPal-Request-Id returns the original order if
       // PayPal created one, and creates it once if not (VERIFY: PayPal's idempotency window on the sandbox).
       const reservationId = await this.#reservationFor(db, order.policy_decision_id);
@@ -311,7 +332,7 @@ export class PurchaseService {
 
     if (remote.status === 'VOIDED') {
       await db.transaction(async (tx) => {
-        await tx.query("UPDATE payment_order SET state = 'FAILED', provider_status = $2 WHERE id = $1", [order.id, remote.status]);
+        await tx.query("UPDATE payment_order SET state = 'FAILED', provider_status = $2, capture_deferred_at = NULL WHERE id = $1", [order.id, remote.status]);
         await this.#event(tx, order.id, 'voided', order.state, 'FAILED', {});
         const reservationId = await this.#reservationFor(tx, order.policy_decision_id);
         if (reservationId) await releaseReservation(tx, reservationId, this.#now());
@@ -328,21 +349,34 @@ export class PurchaseService {
       await this.#setStatus(tx, requestId, 'PAYMENT_PENDING');
     });
     if (remote.status === 'APPROVED') {
+      // Kill switch: record that the capture is owed and stop; the job captures it once payments are back on.
+      if (!this.#paymentsEnabled) {
+        await this.#deferCapture(ctx, order);
+        return this.get(requestId);
+      }
       // The buyer approved on PayPal: capture now, so the purchase completes even if they never return to our page.
       try {
         return await this.capture(requestId);
       } catch (error) {
-        if (error instanceof PurchaseError && error.code === 'PAYMENT_NOT_CAPTURABLE') return this.get(requestId);
+        if (error instanceof PurchaseError && error.code === 'PAYMENT_NOT_CAPTURABLE') {
+          // A capture deferred by the kill switch that PayPal now refuses (approval expired): fail it, free the budget.
+          if (order.capture_deferred_at !== null) await this.#failDeferred(ctx, order);
+          return this.get(requestId);
+        }
         throw error;
       }
     }
     return this.get(requestId);
   }
 
-  /** Reconciles every order whose outcome is unknown. Run periodically. Returns how many were settled. */
+  /**
+   * Reconciles every order whose outcome is unknown and, while payments are on, every capture the kill switch
+   * deferred. Run periodically. Returns how many were settled.
+   */
   async reconcileUnknown(): Promise<number> {
+    const deferred = this.#paymentsEnabled ? " OR (state = 'PAYMENT_PENDING' AND capture_deferred_at IS NOT NULL)" : '';
     const { rows } = await this.#deps.db.query<{ purchase_request_id: string }>(
-      "SELECT purchase_request_id FROM payment_order WHERE state = 'UNKNOWN_OUTCOME' ORDER BY created_at",
+      `SELECT purchase_request_id FROM payment_order WHERE state = 'UNKNOWN_OUTCOME'${deferred} ORDER BY created_at`,
     );
     let settled = 0;
     for (const { purchase_request_id: requestId } of rows) {
@@ -362,15 +396,16 @@ export class PurchaseService {
   }
 
   async capture(requestId: string): Promise<PurchaseView> {
-    const { db, payments } = this.#deps;
+    const { db } = this.#deps;
     const order = await this.#orderRow(requestId);
     if (!order) throw new PurchaseError((await this.#exists(requestId)) ? 'INVALID_STATE' : 'NOT_FOUND');
     if (order.state !== 'PAYMENT_PENDING' || order.provider_order_id === null) throw new PurchaseError('INVALID_STATE');
 
     const ctx: Context = { requestId, mandateId: order.mandate_id, organizationId: order.organization_id, requesterUserId: order.requester_user_id };
     const expected: Money = { amountMinor: Number(toBigInt(order.amount_minor_units)), currency: order.currency };
+    const gateway = this.#moneyGateway();
     try {
-      const result = await payments.captureOrder(order.provider_order_id, `cap-${order.id}`, expected);
+      const result = await gateway.captureOrder(order.provider_order_id, `cap-${order.id}`, expected);
       if (result.status !== 'COMPLETED' || result.capturePending) {
         await db.transaction(async (tx) => {
           await tx.query('UPDATE payment_order SET provider_status = $2 WHERE id = $1', [order.id, result.status]);
@@ -576,6 +611,8 @@ export class PurchaseService {
     const tokenHash = hashToken(token);
     const found = await this.#approvalByHash(db, tokenHash);
     if (!found) throw new PurchaseError('APPROVAL_NOT_FOUND');
+    // Only APPROVE pays. REJECT stays available while the kill switch is off, so a hold can still be released.
+    if (decision === 'APPROVE' && !this.#paymentsEnabled) throw new PurchaseError('PURCHASES_DISABLED');
 
     // Re-quote outside the transaction: a network call must never hold the mandate or approval lock.
     let requotedTotal: Money | undefined;
@@ -764,9 +801,10 @@ export class PurchaseService {
 
   /** Runs after the decision transaction commits, so the idempotency key is stored before money can move. */
   async #createPayment(ctx: Context, order: { orderId: string; decisionId: string; reservationId: string; amount: Money }): Promise<void> {
-    const { db, payments } = this.#deps;
+    const { db } = this.#deps;
+    const gateway = this.#moneyGateway();
     try {
-      const created = await payments.createOrder({
+      const created = await gateway.createOrder({
         amount: order.amount,
         idempotencyKey: `pay-${order.decisionId}`,
         reference: order.decisionId,
@@ -799,7 +837,7 @@ export class PurchaseService {
   /** The reservation stays HELD: the money may have moved. Reconciliation via get-order is #13. */
   async #orderRow(requestId: string): Promise<OrderRow | undefined> {
     const { rows } = await this.#deps.db.query<OrderRow>(
-      `SELECT o.id, o.state, o.provider_order_id, o.amount_minor_units, o.currency, o.policy_decision_id,
+      `SELECT o.id, o.state, o.provider_order_id, o.amount_minor_units, o.currency, o.policy_decision_id, o.capture_deferred_at,
               m.organization_id, pr.mandate_id, pr.requester_user_id
          FROM payment_order o JOIN purchase_request pr ON pr.id = o.purchase_request_id JOIN mandate m ON m.id = pr.mandate_id
         WHERE o.purchase_request_id = $1`,
@@ -810,7 +848,7 @@ export class PurchaseService {
 
   async #markCaptured(ctx: Context, order: OrderRow, amount: Money, providerStatus: string, fromState: string): Promise<void> {
     await this.#deps.db.transaction(async (tx) => {
-      await tx.query("UPDATE payment_order SET state = 'CAPTURED', provider_status = $2 WHERE id = $1", [order.id, providerStatus]);
+      await tx.query("UPDATE payment_order SET state = 'CAPTURED', provider_status = $2, capture_deferred_at = NULL WHERE id = $1", [order.id, providerStatus]);
       await this.#event(tx, order.id, 'captured', fromState, 'CAPTURED', { providerStatus });
       const reservation = await this.#reservationFor(tx, order.policy_decision_id);
       if (reservation) await commitReservation(tx, reservation);
@@ -825,6 +863,32 @@ export class PurchaseService {
       await this.#event(tx, orderId, 'unknown_outcome', 'PAYMENT_PENDING', 'UNKNOWN_OUTCOME', { code });
       await this.#setStatus(tx, ctx.requestId, 'UNKNOWN_OUTCOME');
       await this.#audit(tx, ctx, 'system', null, 'payment.unknown_outcome', { code });
+    });
+  }
+
+  /** Records once that a capture is owed but the kill switch is off (#62). Idempotent across redeliveries and job runs. */
+  async #deferCapture(ctx: Context, order: OrderRow): Promise<void> {
+    if (order.capture_deferred_at !== null) return;
+    await this.#deps.db.transaction(async (tx) => {
+      const marked = await tx.query(
+        'UPDATE payment_order SET capture_deferred_at = $2 WHERE id = $1 AND capture_deferred_at IS NULL RETURNING id',
+        [order.id, this.#now()],
+      );
+      if (marked.rows.length === 0) return;
+      await this.#event(tx, order.id, 'capture_deferred', 'PAYMENT_PENDING', 'PAYMENT_PENDING', { reason: 'PURCHASES_DISABLED' });
+      await this.#audit(tx, ctx, 'system', null, 'payment.capture_deferred', {});
+    });
+  }
+
+  /** A deferred capture PayPal no longer allows: the order fails and its budget hold is released. */
+  async #failDeferred(ctx: Context, order: OrderRow): Promise<void> {
+    await this.#deps.db.transaction(async (tx) => {
+      await tx.query("UPDATE payment_order SET state = 'FAILED', capture_deferred_at = NULL WHERE id = $1", [order.id]);
+      await this.#event(tx, order.id, 'failed', 'PAYMENT_PENDING', 'FAILED', { code: 'CAPTURE_REFUSED_AFTER_DEFERRAL' });
+      const reservationId = await this.#reservationFor(tx, order.policy_decision_id);
+      if (reservationId) await releaseReservation(tx, reservationId, this.#now());
+      await tx.query("UPDATE purchase_request SET status = 'FAILED', failure_code = 'CAPTURE_REFUSED_AFTER_DEFERRAL' WHERE id = $1", [ctx.requestId]);
+      await this.#audit(tx, ctx, 'system', null, 'payment.deferred_capture_failed', {});
     });
   }
 

@@ -62,12 +62,23 @@ The API has no login, so these limits bound what an anonymous client can spend (
 | LLM requests in flight | `LLM_MAX_CONCURRENT` (default 2) | `503 LLM_BUSY` |
 | LLM requests per UTC day | `LLM_DAILY_REQUEST_CAP` (default 100) | `429 LLM_DAILY_CAP`, `Retry-After` until midnight UTC |
 | Request body | 64 KiB | `413 PAYLOAD_TOO_LARGE` |
-| Kill switch | `PURCHASES_ENABLED=false` | `503 PURCHASES_DISABLED` on `POST /mandates/:id/purchases`, `POST /purchases/:id/capture` and `POST /approvals/decision`. Reads, `/health` and `/ready` stay up |
+| Kill switch | `PURCHASES_ENABLED=false` | `503 PURCHASES_DISABLED` on new purchases, capture and `APPROVE` decisions. See below for exactly what it stops |
 
 - **The daily cap is counted in Postgres**, as the number of `purchase_request` rows created since midnight UTC: each one is what triggers the LLM calls (intent, then ranking). It survives restarts and the free plan's spin-down, and needs no extra table. A concurrency slot is taken before the count is read, so the cap can be overshot by at most `LLM_MAX_CONCURRENT - 1`. If the count cannot be read, LLM requests are refused (`503 LLM_CAP_UNAVAILABLE`).
 - **Per-IP limits are in memory**, per instance; a restart resets them, which is acceptable for per-minute windows.
 - **Client IP behind Render's proxy.** `TRUST_PROXY` lists the proxy addresses or CIDRs whose `X-Forwarded-For` entries are trusted. Fastify walks the header from the right and stops at the first untrusted address, so a forged left-most entry is ignored. It is never `true` (which would trust the forgeable left-most entry), and not a hop count (Fastify 5.12 ignores numeric `trustProxy` by design). If the setting is too narrow, all clients share the proxy's address and are limited together: safe, but strict.
-- **Kill switch:** set `PURCHASES_ENABLED=false` on mandate-api and redeploy. The boot log says `feature disabled: PURCHASES_ENABLED=false`. The 60 s reconcile job keeps settling orders that were already authorized.
+- **Kill switch:** set `PURCHASES_ENABLED=false` on mandate-api and redeploy. The boot log says `feature disabled: PURCHASES_ENABLED=false`. It is enforced at one choke point in `PurchaseService`: every PayPal call that creates or captures an order goes through it, so no route, webhook or job can move money while it is off. The routes also answer early with `503`.
+
+  | Stops (no PayPal order is created or captured, no LLM call) | Keeps working |
+  |---|---|
+  | New purchase requests (`POST /mandates/:id/purchases`), including their LLM calls | Reads: purchases, mandates, dashboard, audit trail, approval previews |
+  | `POST /purchases/:id/capture` | `/health`, `/ready` |
+  | `APPROVE` decisions (the approval stays pending) | `REJECT` decisions, which release the budget hold |
+  | Captures a verified webhook or the reconcile job would start: the order is marked `capture_deferred_at` and an order event `capture_deferred` is recorded | Webhook signature verification and event recording; the webhook answers `200`, so PayPal does not retry |
+  | Retrying an order creation whose outcome was unknown | The expiry sweep, and reading PayPal orders (`getOrder`) to reconcile |
+  | | Idempotent replays of an existing request, answered from the database |
+
+  When the switch is back on, the 60 s reconcile job picks up every deferred order: it captures it if PayPal still reports the order `APPROVED` and accepts the capture. If PayPal refuses (for example, the buyer's approval has expired), the order becomes `FAILED` with `CAPTURE_REFUSED_AFTER_DEFERRAL` and its budget hold is released. A `VOIDED` order fails as before.
 
 `VERIFY` on the deployed API, once: (1) from one machine, send 11 `POST /approvals/preview` requests, each with a different made-up `X-Forwarded-For`; the 11th must be `429`, which shows spoofing does not bypass the limit. (2) From a second network (for example a phone hotspot), the same route must still answer `400`, which shows clients are not all sharing the proxy's address. If (2) fails, widen `TRUST_PROXY` to the proxy addresses the logs show.
 

@@ -25,6 +25,7 @@ const STATUS: Record<PurchaseErrorCode, number> = {
   APPROVAL_NOT_FOUND: 404,
   APPROVAL_ALREADY_DECIDED: 409,
   APPROVAL_EXPIRED: 410,
+  PURCHASES_DISABLED: 503,
 };
 
 // The token travels in the body, never in a URL, so it does not end up in access logs or browser history.

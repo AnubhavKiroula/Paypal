@@ -33,7 +33,7 @@ const app = await buildApp({
     maxConcurrentLlm: config.llmMaxConcurrent,
   },
   compose: (log) => {
-    services = compose({ env: process.env, ...(db ? { db } : {}), log });
+    services = compose({ env: process.env, ...(db ? { db } : {}), log, purchasesEnabled: config.purchasesEnabled });
     return services;
   },
 });

@@ -57,6 +57,7 @@ The API has no login, so these limits bound what an anonymous client can spend (
 | Per-IP rate limit, all routes | 120 requests/minute | `429 RATE_LIMITED` |
 | `POST /mandates/:id/purchases` (calls the LLM) | 5/minute per IP, on top of the above | `429 RATE_LIMITED` |
 | `/approvals/preview`, `/approvals/decision` | 10/minute per IP, to slow token guessing | `429 RATE_LIMITED` |
+| `POST /purchases/:id/capture` | 10/minute per IP: it calls PayPal and writes an order event even when refused | `429 RATE_LIMITED` |
 | `POST /webhooks/paypal` | 600/minute per IP, its own budget: a busy client cannot block PayPal | `429 RATE_LIMITED` |
 | `/health`, `/ready` | never limited (Render polls them) | |
 | LLM requests in flight | `LLM_MAX_CONCURRENT` (default 2) | `503 LLM_BUSY` |

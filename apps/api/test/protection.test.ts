@@ -155,10 +155,21 @@ describe('route buckets', () => {
     ['POST', '/mandates/:mandateId/purchases', ['global', 'purchase']],
     ['POST', '/approvals/preview', ['global', 'approval']],
     ['POST', '/approvals/decision', ['global', 'approval']],
+    ['POST', '/purchases/:purchaseId/capture', ['global', 'capture']],
     ['GET', '/mandates/:mandateId', ['global']],
     ['GET', undefined, ['global']],
   ])('%s %s -> %j', (method, url, buckets) => {
     expect(bucketsFor(method, url)).toEqual(buckets);
+  });
+
+  it('gives capture its own strict bucket, 10 per minute by default (finding 6)', async () => {
+    expect(RATE_LIMITS.capture).toBe(10);
+    const a = await app({ purchases: stubPurchases().service, protection: { limits: { capture: 1 } } });
+    const capture = () => post(a, '/purchases/00000000-0000-4000-8000-000000000001/capture', {});
+    expect((await capture()).statusCode).toBe(409);
+    const limited = await capture();
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toMatchObject({ error: 'RATE_LIMITED' });
   });
 
   it('has a stricter approval limit than the global one, and a generous webhook limit', () => {

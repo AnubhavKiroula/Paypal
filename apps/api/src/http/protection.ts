@@ -8,10 +8,10 @@ import type { ErrorBody } from './errors.js';
 // Abuse protection for the public API (#62): per-IP rate limits, a daily cap and a concurrency limit on requests
 // that call the LLM, and the PURCHASES_ENABLED kill switch. Rejections are counted and logged without request data.
 
-export type Bucket = 'global' | 'purchase' | 'approval' | 'webhook';
+export type Bucket = 'global' | 'purchase' | 'approval' | 'capture' | 'webhook';
 
 /** Requests per minute per client IP. Approval links get a strict budget to slow token guessing. */
-export const RATE_LIMITS: Readonly<Record<Bucket, number>> = { global: 120, approval: 10, purchase: 5, webhook: 600 };
+export const RATE_LIMITS: Readonly<Record<Bucket, number>> = { global: 120, approval: 10, capture: 10, purchase: 5, webhook: 600 };
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -27,6 +27,8 @@ export function bucketsFor(method: string, url: string | undefined): Bucket[] {
   if (url === '/webhooks/paypal') return ['webhook'];
   if (method === 'POST' && url === '/mandates/:mandateId/purchases') return ['global', 'purchase'];
   if (url === '/approvals/preview' || url === '/approvals/decision') return ['global', 'approval'];
+  // Capture calls PayPal and writes an order event even when refused.
+  if (method === 'POST' && url === '/purchases/:purchaseId/capture') return ['global', 'capture'];
   return ['global'];
 }
 

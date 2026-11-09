@@ -52,10 +52,17 @@ export function purchaseRoutes(service: PurchaseService, guard: PurchaseGuard) {
 
   return (app: FastifyInstance): void => {
     app.post('/mandates/:mandateId/purchases', async (request, reply) => {
-      const off = switchedOff(request, reply);
-      if (off) return off;
       const { mandateId } = parseRequest(MandateParamsSchema, request.params);
       const body = parseRequest(SubmitBodySchema, request.body);
+      // A replay is a database read: answer it before the kill switch and the LLM gate, which only new requests need.
+      try {
+        const stored = await service.replay({ mandateId, ...body });
+        if (stored) return await reply.status(200).send(stored);
+      } catch (error) {
+        return sendPurchaseError(error, request, reply);
+      }
+      const off = switchedOff(request, reply);
+      if (off) return off;
       // Intent parsing and ranking call the LLM: admit only within the concurrency limit and the daily cap.
       const entered = await guard.gate.enter();
       if (!entered.ok) {

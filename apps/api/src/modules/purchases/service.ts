@@ -165,6 +165,15 @@ export class PurchaseService {
     return this.#deps.payments;
   }
 
+  /**
+   * The stored result for a repeated requestKey, or undefined for a new request. A database read only: the route
+   * answers replays with it before the LLM gate, so a client retrying after a lost response is never refused.
+   */
+  async replay(input: SubmitInput): Promise<PurchaseView | undefined> {
+    const existing = await this.#findByKey(input);
+    return existing ? this.get(existing) : undefined;
+  }
+
   /** Idempotent on requestKey: a repeat returns the stored result and never pays twice. */
   async submit(input: SubmitInput): Promise<{ view: PurchaseView; created: boolean }> {
     const { db } = this.#deps;

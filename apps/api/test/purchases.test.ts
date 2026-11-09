@@ -357,6 +357,18 @@ describe('purchase flow', () => {
   });
 });
 
+describe('replay (answered from the database, before any LLM gate)', () => {
+  it('returns the stored view for a known key, nothing for a new one, and refuses a reused key with other content', async () => {
+    const mandateId = await newMandate();
+    const { svc } = service();
+    const input = { mandateId, requesterUserId: DEMO_IDS.requester, text: 'two gel pens', requestKey: `replay-${next()}-${Date.now()}` };
+    expect(await svc.replay(input)).toBeUndefined();
+    const { view } = await svc.submit(input);
+    expect(await svc.replay(input)).toEqual(view);
+    await expect(svc.replay({ ...input, text: 'forty gel pens' })).rejects.toMatchObject({ code: 'REQUEST_KEY_CONFLICT' });
+  });
+});
+
 describe('capture', () => {
   async function pending(payments = new FakePayments()) {
     const mandateId = await newMandate();

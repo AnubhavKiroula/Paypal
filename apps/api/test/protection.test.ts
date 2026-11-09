@@ -26,11 +26,16 @@ function memoryLog() {
   return { lines, warn: (fields: Record<string, unknown>, message: string) => void lines.push({ fields, message }) };
 }
 
+/** Request keys the stub treats as already stored (idempotent replays). */
+const STORED_KEY = 'protect-stored-0000';
+
 /** A purchase service whose submit() resolves only when the test says so. */
 function stubPurchases() {
   const pending: (() => void)[] = [];
   let submitted = 0;
   const service = {
+    replay: (input: { requestKey: string }) =>
+      Promise.resolve(input.requestKey === STORED_KEY ? { id: 'p-stored', mandateId: MANDATE, status: 'CAPTURED' } : undefined),
     submit: () => {
       submitted += 1;
       return new Promise((resolve) => pending.push(() => resolve({ view: { id: 'p-1', mandateId: MANDATE, status: 'QUOTED' }, created: true })));
@@ -213,6 +218,33 @@ describe('concurrency limit on LLM requests', () => {
     stub.finishAll();
     expect((await again).statusCode).toBe(201);
     expect(rejections.snapshot()).toEqual({ llm_busy: 1 });
+  });
+
+  it('answers an idempotent replay from the database before the gate, even with the gate full and the cap reached (finding 4)', async () => {
+    const stub = stubPurchases();
+    const rejections = new Rejections(memoryLog());
+    const a = await app({
+      purchases: stub.service,
+      protection: { maxConcurrentLlm: 1, dailyLlmCap: 1, countLlmRequestsToday: () => Promise.resolve(0), rejections },
+    });
+    // Fill the only slot with a new request that stays in flight.
+    const inFlight = post(a, `/mandates/${MANDATE}/purchases`, submitBody(20));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const replay = await post(a, `/mandates/${MANDATE}/purchases`, { ...submitBody(), requestKey: STORED_KEY }, {}, '198.51.100.30');
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ id: 'p-stored', status: 'CAPTURED' });
+    stub.finishAll();
+    await inFlight;
+    expect(stub.submitted()).toBe(1);
+    expect(rejections.snapshot()).toEqual({});
+  });
+
+  it('answers a replay while the kill switch is off: it is a read', async () => {
+    const stub = stubPurchases();
+    const a = await app({ purchases: stub.service, protection: { purchasesEnabled: false } });
+    const replay = await post(a, `/mandates/${MANDATE}/purchases`, { ...submitBody(), requestKey: STORED_KEY });
+    expect(replay.statusCode).toBe(200);
+    expect(stub.submitted()).toBe(0);
   });
 
   it('frees the slot when the request fails', async () => {

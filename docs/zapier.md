@@ -53,11 +53,30 @@ Zapier and the message service do see the link, so treat approval messages like 
    - `WEB_APP_URL`: the web app's public URL, for example `https://<web-url>` (copy it from the Render service page). Use `http://localhost:5173` locally.
    
    On Render, both are `sync: false` in `render.yaml`.
-3. **Send a sample.** Submit a request that needs approval, for example a 27-inch monitor, a conference speakerphone and a wireless keyboard (over the 300.00 threshold). The Zap's trigger test should show the fields above.
+3. **Send a sample.** Submit a request that needs approval and names items of the offline fixture catalog, for example "Two conference speakerphones and three HD webcams for the club room" (355.00, over the 300.00 threshold). The Zap's trigger test should show the fields above.
 4. **Action:** *Email by Zapier* (or Gmail, or Slack *Send Channel Message*) to the approver:
    - **Subject:** `Approve {{amountDisplay}}?`
    - **Body:** the reasons' `message` fields, `expiresAt`, and `reviewUrl` as the link.
 5. **Turn the Zap on.**
+
+## Verified on the deployed app
+
+One round trip on the deployed API and web app, 2026-11-09 (UTC), with a Zap built as above using *Email by Zapier*:
+
+| Step | What happened | Evidence |
+|---|---|---|
+| Trigger | The demo requester (Riya) asked for "Two conference speakerphones and three HD webcams for the club room". The policy returned `NEEDS_APPROVAL` (`THRESHOLD_EXCEEDED`, 355.00 USD, policy `0.1.0`), and the API posted `approval.requested` to the Catch Hook | Audit: `policy.decided` 20:34:22.340, `approval.notified` 20:34:22.752 |
+| Email delivery | The Zap emailed the approver with the review link | Seen in the team's inbox (not logged by the API) |
+| Approval | The approver (Arjun) opened the link on the deployed web app, saw the cart and the reason, and approved. The page said the price was checked again before paying | Audit: `approval.approved` by the approver 21:13:27.442 |
+| Outcome | The API created PayPal order `3KU14326BJ347002Y` for 355.00 USD, waiting for the buyer (`PAYER_ACTION_REQUIRED`) | Audit: `payment.order_created` 21:13:30.099 |
+
+Purchase request `18f28e55-8844-4427-8584-7c47ce7d1d5b` (sandbox, not a secret).
+
+**Limits** (Zapier's plan terms as shown in the team's account on 2026-11-10; check again before judging):
+
+- The Zapier Pro trial ends **2026-11-24**, before judging ends on 2026-12-15. After the trial the Zap may stop running.
+- Free and Trial plans allow **5 emails per account per day** through Zapier's email action.
+- If the Zap stops, the API keeps working as described below: no message is sent, the request waits in `PENDING_APPROVAL`, and the budget hold is released at expiry.
 
 ## When the Zap is missing or down
 

@@ -1,4 +1,56 @@
-# Mandate
+<p align="center">
+  <img src="docs/assets/logo.svg" width="128" height="128" alt="Mandate logo: a shield with a check mark">
+</p>
+
+<h1 align="center">Mandate</h1>
+
+<p align="center"><b>Spending guardrails for AI agents.</b><br>The LLM proposes. Code decides. Every decision is audited.</p>
+
+<p align="center">
+  <!-- Build and security -->
+  <a href="https://github.com/PxA-Labs/Mandate/actions/workflows/ci.yml"><img src="https://github.com/PxA-Labs/Mandate/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/PxA-Labs/Mandate/actions/workflows/codeql.yml"><img src="https://github.com/PxA-Labs/Mandate/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL"></a>
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/PxA-Labs/Mandate"><img src="https://api.securityscorecards.dev/projects/github.com/PxA-Labs/Mandate/badge" alt="OpenSSF Scorecard"></a>
+  <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-2ea44f?logo=githubactions&logoColor=white" alt="Security policy"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue" alt="License: Apache-2.0"></a>
+</p>
+
+<p align="center">
+  <!-- Stack -->
+  <a href="tsconfig.base.json"><img src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/Node.js-%E2%89%A522.12-5FA04E?logo=nodedotjs&logoColor=white" alt="Node.js"></a>
+  <a href="pnpm-workspace.yaml"><img src="https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white" alt="pnpm"></a>
+  <a href="apps/api"><img src="https://img.shields.io/badge/Fastify-5-000000?logo=fastify&logoColor=white" alt="Fastify"></a>
+  <a href="apps/web"><img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React"></a>
+  <a href="docs/er-diagram.md"><img src="https://img.shields.io/badge/PostgreSQL-source_of_truth-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL"></a>
+  <a href="packages/shared"><img src="https://img.shields.io/badge/Zod-schemas-3E67B1?logo=zod&logoColor=white" alt="Zod"></a>
+  <a href="vitest.config.ts"><img src="https://img.shields.io/badge/tested_with-Vitest-6E9F18?logo=vitest&logoColor=white" alt="Vitest"></a>
+</p>
+
+<p align="center">
+  <!-- Integrations -->
+  <a href="docs/spike-results.md"><img src="https://img.shields.io/badge/PayPal-Orders_v2_sandbox-003087?logo=paypal&logoColor=white" alt="PayPal Orders v2 sandbox"></a>
+  <a href="docs/zapier.md"><img src="https://img.shields.io/badge/Zapier-human_approvals-FF4F00?logo=zapier&logoColor=white" alt="Zapier human approvals"></a>
+  <a href="docs/llm-layer.md"><img src="https://img.shields.io/badge/NVIDIA-Mistral_Large_4-76B900?logo=nvidia&logoColor=white" alt="LLM: Mistral Large 4 on NVIDIA"></a>
+  <a href="apps/web"><img src="https://img.shields.io/badge/AG_Grid-Community-0F3D5C" alt="AG Grid Community"></a>
+  <a href="https://mandate-web-vo77.onrender.com"><img src="https://img.shields.io/badge/Render-live-46E3B7-46E3B7?logo=render&logoColor=black" alt="Deployed on Render"></a>
+</p>
+
+<p align="center">
+  <!-- Community -->
+  <a href="https://devpost.com/"><img src="https://img.shields.io/badge/PayPal_AI_Hackathon-2026-003087?logo=devpost&logoColor=white" alt="PayPal AI Hackathon 2026"></a>
+  <a href="https://www.conventionalcommits.org/"><img src="https://img.shields.io/badge/Conventional_Commits-1.0.0-fe5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
+  <a href="CODE_OF_CONDUCT.md"><img src="https://img.shields.io/badge/Contributor_Covenant-2.1-4baaaa" alt="Contributor Covenant 2.1"></a>
+  <a href="https://github.com/PxA-Labs/Mandate/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
+</p>
+
+<h3 align="center">🎬 Watch the launch video (1:31, narrated)</h3>
+
+https://github.com/user-attachments/assets/51519db0-fec3-4775-88c2-04c4b5f27266
+
+<p align="center"><sub>Your AI agent just got a credit card. The LLM proposes, code decides. If the player does not load, <a href="https://github.com/user-attachments/assets/51519db0-fec3-4775-88c2-04c4b5f27266">open the video directly</a>.<br>Music: Sascha Ende, <a href="https://ende.app/en">ende.app</a> (CC BY 4.0). Voice: Kokoro-82M.</sub></p>
+
+---
 
 **Spending guardrails for AI agents.** A team sets the rules; an AI agent shops inside them; deterministic code — not the model — decides what gets paid for.
 
@@ -6,7 +58,15 @@ Entry for the **PayPal AI Hackathon** (Devpost). Deadline **Nov 12, 2026, 12:00 
 
 > **Labels used in this README.** `VERIFY` = we have not confirmed this yet. `HYPOTHESIS` = a guess about users or business that interviews must test. `TBD` = does not exist yet. We do not state results we have not measured.
 
-**Status (Nov 10):** the backend, the AI layer, the policy engine, the web app and the eval harness are built and tested in CI, and deployed on Render. The deployed API has made one sandbox purchase end to end: a live LLM request, a policy `ALLOW`, a PayPal order the buyer approved, and a `COMPLETED` capture ([evidence](docs/deploy.md#gate-1-evidence)). **Not yet done:** the eval numbers. See [What works today](#what-works-today).
+**Status (Nov 10):** the backend, the AI layer, the policy engine, the web app and the eval harness are built and tested in CI. Real PayPal sandbox payments were verified on 2026-11-06 with the spike script ([docs/spike-results.md](docs/spike-results.md)). A live structured LLM call was verified on 2026-11-08. The app is **live on Render** ([web app](https://mandate-web-vo77.onrender.com) · [API](https://mandate-api-2j9m.onrender.com/health)). On 2026-11-09 the deployed app took a purchase end to end: the live LLM parsed the request, the policy engine returned `ALLOW`, and the PayPal sandbox order was captured with provider status `COMPLETED` ([evidence](docs/deploy.md#gate-1-evidence)). **Not yet done:** the live eval numbers. See [What works today](#what-works-today).
+
+| | Link |
+|---|---|
+| Live web app | **[mandate-web-vo77.onrender.com](https://mandate-web-vo77.onrender.com)** |
+| Live API | [mandate-api-2j9m.onrender.com](https://mandate-api-2j9m.onrender.com/health) (`/health`, `/ready`) |
+| Demo video | [Launch video, 1:31](https://github.com/user-attachments/assets/51519db0-fec3-4775-88c2-04c4b5f27266) |
+
+**Contents:** [Problem](#the-problem) · [Solution](#the-solution) · [USP](#usp-we-measure-it) · [Architecture](#architecture-at-a-glance) · [Getting started](#getting-started) · [What works today](#what-works-today) · [Eval protocol](#eval-protocol) · [Contributing](#contributing) · [Security](#security)
 
 **Docs:** [architecture](docs/architecture.md) · [UML](docs/uml.md) · [ER diagram](docs/er-diagram.md) · [tech stack](docs/tech-stack.md) · [ADRs](docs/adr/) · [idea proposal](docs/Idea-propose-Anubhav.md) · [research](docs/R&D.md)
 
@@ -132,7 +192,7 @@ docs/             architecture, UML, ER diagram, tech stack, ADRs, deploy runboo
 You need **Node 22.12+** (24 recommended), **pnpm 11** (`corepack enable` installs the pinned version) and **Docker** for Postgres.
 
 ```bash
-git clone https://github.com/PxA-Labs/Paypal.git mandate && cd mandate
+git clone https://github.com/PxA-Labs/Mandate.git mandate && cd mandate
 corepack enable
 pnpm install
 cp .env.example .env          # fill in the keys below; .env is git-ignored
@@ -176,10 +236,10 @@ pnpm eval --live                           # the real benchmark; needs the LLM s
 | LLM intent parser and ranker (no tools; fabricated ids and inflated quantities refused) | Built; tested with a fake model. One live structured call verified on NVIDIA with Mistral Large 4 (2026-11-08, `pnpm smoke:live`). Runs live in the deployed API since 2026-11-09 UTC (55–143 s per request). The live eval run is still pending (#20) |
 | Catalog | **Offline fixture** with deliberately poisoned listings. Channel3 not integrated (`VERIFY`) |
 | PayPal: create order, capture, read order, webhook signature check, reconciliation | Built against the Orders v2 sandbox API; tested with fakes. **Live sandbox run recorded 2026-11-06** ([docs/spike-results.md](docs/spike-results.md)): a buyer-approved $5.00 order captured `COMPLETED`, and the saved wallet was then charged $5.00 with no buyer present (`COMPLETED`). That run used the spike script from a laptop. **Through the deployed API (2026-11-09 UTC):** a $23.00 policy-`ALLOW` purchase, approved by the sandbox buyer, captured `COMPLETED`: order `0T9321544D519493Y`, capture `9KR605721A308010M` ([evidence](docs/deploy.md#gate-1-evidence)). The API uses buyer approval; the saved-wallet path is not wired in yet |
-| Approvals: single-use links, Zapier message, review page | Built. The deployed API sent one `NEEDS_APPROVAL` request to a Zapier Catch Hook (2026-11-09 UTC, audit `approval.notified`); the rest of the Zap is in [docs/zapier.md](docs/zapier.md) |
-| Web app: request, decision with every reason, mandate setup, dashboard, audit trail | Built; deployed on Render (static site). The Gate 1 purchase above was made through the API, not the UI |
+| Approvals: single-use links, Zapier message, review page | Built. **Round trip verified on the deployed app (2026-11-09 UTC):** a $355.00 `NEEDS_APPROVAL` request triggered the Zap, the approver got the email, opened the link and approved, the price was checked again and a PayPal order was created ([docs/zapier.md](docs/zapier.md#verified-on-the-deployed-app)). The Zapier trial ends 2026-11-24, before judging ends |
+| Web app: request, decision with every reason, mandate setup, dashboard, audit trail | Built; **[live on Render](https://mandate-web-vo77.onrender.com)** |
 | Benchmark: 31 benign requests, 26 attacks in 13 categories, half held out | Harness and suites built; **no live results yet**, so this README reports none |
-| Deployment | Deployed on Render's free plan from `render.yaml` (#14), with abuse protection (#62); `pnpm smoke:deployed` passes. The URLs are not published in the repo ([docs/deploy.md](docs/deploy.md)) |
+| Deployment | **Live on Render** from `render.yaml`: [web app](https://mandate-web-vo77.onrender.com), [API](https://mandate-api-2j9m.onrender.com/health), Postgres. Checked 2026-11-10: `/health` and `/ready` (Postgres ok) return 200, the seeded mandate and dashboard summary load, and CORS allows the web origin |
 
 ## Tools used and how
 
@@ -187,12 +247,12 @@ Only what the code does today. Planned work is marked as such.
 
 | Tool | How Mandate uses it | Status |
 |---|---|---|
-| **PayPal** (REST Orders v2, sandbox) | `packages/payments` creates orders with `PayPal-Request-Id` idempotency keys, captures them for the exact approved amount, reads orders to reconcile unknown outcomes, and verifies webhook signatures. Only that package may call PayPal | Built; live sandbox runs from a laptop (2026-11-06) and through the deployed API (2026-11-09 UTC). Agent Toolkit / MCP not used |
+| **PayPal** (REST Orders v2, sandbox) | `packages/payments` creates orders with `PayPal-Request-Id` idempotency keys, captures them for the exact approved amount, reads orders to reconcile unknown outcomes, and verifies webhook signatures. Only that package may call PayPal | Built. Live sandbox payments verified with the spike script (2026-11-06) and through the deployed API (2026-11-09, captured `COMPLETED`). Agent Toolkit / MCP not used |
 | **NVIDIA API catalog** (`mistralai/mistral-large-4-1t-a52b`, OpenAI-compatible) | Intent parsing and ranking with strict JSON-schema output and no tools, over plain `fetch`; the naive and hardened eval baselines use tool calls, only inside `packages/evals` | One live structured call and a 4-call tool-use check verified; runs in the deployed API; eval run pending (#20) |
 | **Anthropic Claude** (`@anthropic-ai/sdk`) | The original plan. The adapter is still in the code, tested with fakes | Never run live: no key |
 | **AG Grid Community** | The dashboard's requests table: filters, sorting, keyboard navigation | Built. "AG Studio" not used |
 | **Zapier** | Webhooks by Zapier Catch Hook receives approval requests and messages the approver | API side built; Zap to be created |
-| **Render** | Blueprint for the API, the static web app and Postgres | Written; not deployed |
+| **Render** | Blueprint for the API, the static web app and Postgres | [Live](https://mandate-web-vo77.onrender.com) |
 | **Postman** | Collection covering every API endpoint, in `postman/` | Built |
 | **Channel3** | Planned product search | Not integrated |
 | **Elastic, APIMatic** | Planned | Not used |
@@ -219,7 +279,7 @@ All five criteria carry equal weight. Technological Implementation is also the t
 
 | Criterion | What we must show | Evidence artifact |
 |---|---|---|
-| **Technological Implementation** (tie-break) | Real PayPal sandbox calls from deployed code; order state machine with idempotency; deterministic policy engine; webhook dedupe and reconciliation; durable approvals | Deployed demo URL · [docs/uml.md](docs/uml.md) state and sequence diagrams · `packages/policy` unit tests · CI green |
+| **Technological Implementation** (tie-break) | Real PayPal sandbox calls from deployed code; order state machine with idempotency; deterministic policy engine; webhook dedupe and reconciliation; durable approvals | [Live demo](https://mandate-web-vo77.onrender.com) · [docs/uml.md](docs/uml.md) state and sequence diagrams · `packages/policy` unit tests · CI green |
 | **Design** | One coherent flow (set mandate, request, decision, pay, track); every block shows a human-readable reason | Demo video walkthrough · AG Studio dashboard screens · reason codes in [docs/er-diagram.md](docs/er-diagram.md) |
 | **Potential Impact** | A named user group, interview evidence, and a quantified safety result | Interview summaries in this README · eval results in `packages/evals/results/` |
 | **Innovation / Idea** | Guardrail-first agent commerce: injection and structuring defenses outside the model, measured against two baselines | Three-configuration comparison table, populated after the eval run · [ADR 0004](docs/adr/0004-llm-has-no-tools-policy-in-code.md) |
@@ -320,16 +380,13 @@ Open questions. None of these may be stated as fact until tested.
 
 ## Contributing
 
-| Step | Rule |
-|---|---|
-| 1. Fork | `origin` is your fork; `upstream` is the team repo |
-| 2. Branch | From `upstream/main`. Names: `type/short-topic` — `feat/`, `fix/`, `docs/`, `chore/`, `test/`, `eval/` |
-| 3. Commit | [Conventional Commits](https://www.conventionalcommits.org/): `feat(policy): block split purchases`. One logical change per commit |
-| 4. Check | Lint, typecheck and tests pass. No secrets. Docs updated if behavior changed. Policy changes ship with unit tests |
-| 5. PR | From your fork to upstream `main`. Body: summary, what changed, how tested, `VERIFY` items |
-| 6. Review | Never push to upstream, force-push, or merge without a teammate's review |
+Contributions are welcome. **[CONTRIBUTING.md](CONTRIBUTING.md)** covers setup, the hard rules, the branch and commit conventions, the checks to run before a PR, and what to add for policy, LLM, payment or migration changes.
 
-Agent-assisted work must follow [CLAUDE.md](CLAUDE.md) — in particular the hard rules on LLM/payment separation, untrusted product text, integer minor units, idempotency, sandbox-only operation, and no secrets in git.
+In short: branch from `main`, use [Conventional Commits](https://www.conventionalcommits.org/), make sure lint, typecheck and tests pass, never commit secrets, and get a teammate's review before merging. Everyone taking part agrees to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Please do not report vulnerabilities in public issues. Use GitHub's private reporting instead ([Security → Report a vulnerability](https://github.com/PxA-Labs/Mandate/security/advisories/new)). See [SECURITY.md](SECURITY.md) for what is in scope and what to expect.
 
 ## License
 

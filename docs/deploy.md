@@ -26,6 +26,7 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
    | `DATABASE_URL` | mandate-api | Set by Render from `mandate-db` | Everything |
    | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | mandate-api | Sandbox app credentials (developer.paypal.com → Apps & Credentials → **Sandbox**) | Purchases |
    | `LLM_API_KEY` | mandate-api | NVIDIA API key from build.nvidia.com. The other `LLM_*` values are set in `render.yaml` ([llm-layer.md](llm-layer.md) section 9). Set the key only once abuse protection is deployed | Purchases |
+   | `LLM_TIMEOUT_MS` | mandate-api | Default `120000`. Ours is `240000`: one NVIDIA call ran past 120 s and the request ended `INTENT_FAILED` (see [Gate 1 evidence](#gate-1-evidence)) | Optional |
    | `PURCHASES_ENABLED` | mandate-api | Unset or `true`; `false` is the kill switch (see below) | Optional |
    | `TRUST_PROXY`, `LLM_DAILY_REQUEST_CAP`, `LLM_DAILY_PER_IP_CAP`, `LLM_MAX_CONCURRENT` | mandate-api | Set in `render.yaml`; see [Abuse protection](#abuse-protection) | Client IP, LLM limits |
    | `DEBUG_PROXY_HOPS` | mandate-api | Unset (off). `true` only while verifying `TRUST_PROXY` (see Abuse protection) | Optional |
@@ -45,7 +46,28 @@ Render adds a random suffix (`mandate-api-xxxx.onrender.com`) when a service nam
    pnpm smoke:deployed https://<api> --web https://<web> --purchase   # also submits one purchase
    ```
 
-   It prints one PASS/FAIL line per check (health, Postgres, demo mandate, dashboard summary, CORS, and with `--purchase`, a purchase decision) and exits non-zero on any failure. It prints status codes only, never bodies or configuration. `--purchase` is opt-in because an `ALLOW` holds demo budget and opens a sandbox PayPal order.
+   It prints one PASS/FAIL line per check (health, Postgres, demo mandate, dashboard summary, CORS, and with `--purchase`, a purchase decision) and exits non-zero on any failure. It prints status codes only, never bodies or configuration. `--purchase` is opt-in because an `ALLOW` holds demo budget and opens a sandbox PayPal order. It asks for whiteboard markers: the deployed API searches only the offline fixture catalog ([`fixture.ts`](../apps/api/src/modules/catalog/fixture.ts)), so a request must name one of its items or it ends `NO_MATCH`.
+
+## Gate 1 evidence
+
+One sandbox purchase created and captured by the deployed API on 2026-11-09, 20:22–20:31 UTC (`main` at `769935d`, Render free plan). The calls were plain HTTP requests from a laptop; the buyer approved on PayPal's sandbox checkout page. Sandbox only: no real money moved.
+
+| Step | Result |
+|---|---|
+| `POST /mandates/<demo-mandate>/purchases` as the demo requester (Riya): "Two packs of whiteboard markers for the office" | `201` in 83 s. Policy `ALLOW` (`WITHIN_MANDATE`), cart 2 × "Whiteboard markers, 12 colours" = 23.00 USD. PayPal order created, `PAYER_ACTION_REQUIRED` |
+| Buyer approval | A US sandbox Personal account approved the order |
+| `POST /purchases/<id>/capture` | `200` in 3.5 s. Purchase `CAPTURED`, PayPal order `COMPLETED` |
+| Read back from PayPal (`pnpm --filter @mandate/payments spike get <order>`) | Capture `COMPLETED`, 23.00 USD |
+
+| Record (sandbox ids, not secrets) | Id |
+|---|---|
+| Purchase request | `66e6d620-8342-4caa-99ea-923532f2404b` |
+| PayPal order | `0T9321544D519493Y` |
+| PayPal capture | `9KR605721A308010M` |
+
+**Approval path (20:32–20:34 UTC):** "Two conference speakerphones and three HD webcams for the club room" returned `NEEDS_APPROVAL` (`THRESHOLD_EXCEEDED`, 355.00 USD) in 143 s, and the audit trail records `approval.notified` 0.4 s later (purchase `18f28e55-8844-4427-8584-7c47ce7d1d5b`). That shows the API called the Zapier Catch Hook; what the Zap does next is in [zapier.md](zapier.md).
+
+**What failed first:** "printer paper" ended `NO_MATCH` (not in the fixture catalog). One request ended `INTENT_FAILED` when the LLM call ran past the 120 s default timeout. One `ALLOW` ended `PAYPAL_AUTH` because the PayPal credentials on Render had been pasted wrong. Requests took 55–143 s end to end on the NVIDIA free endpoint.
 
 At boot the API logs `feature disabled: configuration missing` with the **names** of missing variables, never their values, and still serves `/health` and `/ready`. Purchases are registered only when the database, PayPal and LLM settings are all present.
 
@@ -126,6 +148,9 @@ Service → **Events** → pick the last good deploy → **Rollback**. Migration
 | Smoke: `origin not allowed (set WEB_ORIGIN)`; browser console shows CORS errors | `WEB_ORIGIN` on mandate-api is not exactly the web URL | Set it (scheme + host, no trailing slash) and redeploy mandate-api |
 | The web app calls `127.0.0.1:3000` or its own URL | `VITE_API_URL` unset or wrong at **build** time | Fix it on mandate-web, then rebuild |
 | Smoke: `purchases disabled` | A purchase variable is missing | The API boot log names it |
+| Purchase `NO_MATCH` | The request names nothing in the offline fixture catalog | Ask for one of its items ([`fixture.ts`](../apps/api/src/modules/catalog/fixture.ts)) |
+| Purchase `FAILED`, `INTENT_FAILED` or `RANKING_FAILED`, after about 120 s | An LLM call ran past `LLM_TIMEOUT_MS` | Raise it (maximum `300000`) and redeploy |
+| Order `FAILED`, `PAYPAL_AUTH` | PayPal rejected `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | Re-paste both from the **Sandbox** app, with no quotes or spaces, then redeploy |
 | First request takes about a minute | Free web services sleep after 15 minutes idle | Expected on the free plan; open the URL before a demo |
 
 ## Known limits

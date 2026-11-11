@@ -22,7 +22,9 @@ export interface Check {
   detail: string;
 }
 
-const PURCHASE_TEXT = 'Two packs of printer paper for the office';
+// Must name an item of the fixture catalog the deployed API searches (modules/catalog/fixture.ts): 2 x 11.50 USD,
+// office supplies, below the demo mandate's per-item cap and approval threshold, so it is ALLOWed and reaches PayPal.
+const PURCHASE_TEXT = 'Two packs of whiteboard markers for the office';
 
 /** Only plain strings from a response reach the output; anything else prints as the fallback. */
 const str = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
